@@ -7,7 +7,7 @@ export async function onRequest(context) {
 
   const apiKey = env.DEEPSEEK_API_KEY;
   if (!apiKey) {
-    return json({ error: '服务端未配置 DEEPSEEK_API_KEY 环境变量' }, 500);
+    return json({ error: '服务端未配置 API Key 环境变量' }, 500);
   }
 
   let body;
@@ -37,14 +37,14 @@ export async function onRequest(context) {
 请直接给出回答。`;
 
   try {
-    const r = await fetch('https://api.deepseek.com/chat/completions', {
+    const r = await fetch('https://api.siliconflow.cn/v1/chat/completions', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
         'Authorization': `Bearer ${apiKey}`
       },
       body: JSON.stringify({
-        model: 'deepseek-chat',
+        model: 'Qwen/Qwen2.5-7B-Instruct',
         messages: [
           { role: 'system', content: systemPrompt },
           { role: 'user', content: userPrompt }
@@ -57,7 +57,7 @@ export async function onRequest(context) {
 
     if (!r.ok) {
       const t = await r.text();
-      return json({ error: '上游大模型错误: ' + t.slice(0, 200) }, 502);
+      return json({ error: '上游大模型错误: ' + t.slice(0, 300) }, 502);
     }
 
     const data = await r.json();
