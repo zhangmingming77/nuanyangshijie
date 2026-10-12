@@ -2,233 +2,646 @@
 <html lang="zh-CN">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-<title>暖阳视界 - 盲道路况 AI 播报</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>暖阳视界 · 盲道路况 AI 播报</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Ccircle cx='32' cy='32' r='28' fill='%23ff9f2e'/%3E%3Ccircle cx='32' cy='32' r='16' fill='%23fff4e0'/%3E%3C/svg%3E">
 <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.20.0/dist/tf.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/coco-ssd@2.2.3/dist/coco-ssd.min.js"></script>
 <style>
-  *{box-sizing:border-box;margin:0;padding:0}
-  body{background:#111;color:#fff;font-family:system-ui,-apple-system,"PingFang SC","Microsoft YaHei"}
-  #status{padding:10px;font-size:16px;text-align:center;background:#1e293b}
-  .btn-row{display:flex;gap:8px;padding:8px;background:#0f172a}
-  button{flex:1;padding:16px;font-size:18px;background:#2563eb;color:white;border:none;border-radius:8px;font-weight:600}
-  button.secondary{background:#059669}
-  button.listening{background:#dc2626;animation:pulse 1s infinite}
-  @keyframes pulse{0%,100%{opacity:1}50%{opacity:.6}}
-  #wrap{position:relative}
-  video{width:100%;display:block;object-fit:cover;background:#000}
-  canvas{position:absolute;top:0;left:0;width:100%;height:100%;pointer-events:none}
-  #log{height:200px;overflow-y:auto;padding:10px;font-size:14px;background:#1f2937;white-space:pre-wrap;line-height:1.6}
-  #aiTip{padding:8px;font-size:13px;color:#fbbf24;background:#422006;border-top:1px solid #78350f;min-height:32px}
+:root{
+  --bg:#0b0e13;            /* 深炭，带一点冷 */
+  --panel:#141a23;         /* 面板 */
+  --panel-2:#1a2230;       /* 次级面板 */
+  --line:#232c3a;
+  --txt:#f2f5f9;           /* 主文字 */
+  --txt-2:#9aa7b8;         /* 次级文字 */
+  --sun:#ff9f2e;           /* 暖阳主色 */
+  --sun-soft:#fff4e0;
+  --danger:#ff4d4f;
+  --danger-bg:#2a1215;
+  --warn:#ff8800;
+  --warn-bg:#2a1a0a;
+  --ok:#2ecc8f;
+  --ok-bg:#0e2a1f;
+  --radius:14px;
+  --shadow:0 10px 30px rgba(0,0,0,.45);
+}
+*{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent}
+html,body{height:100%}
+body{
+  background:
+    radial-gradient(1200px 600px at 80% -10%, rgba(255,159,46,.10), transparent 60%),
+    var(--bg);
+  color:var(--txt);
+  font-family:system-ui,-apple-system,"PingFang SC","Microsoft YaHei",sans-serif;
+  display:flex;flex-direction:column;min-height:100vh;
+}
+.wrap{flex:1;display:flex;flex-direction:column;max-width:640px;margin:0 auto;width:100%;padding:12px;gap:12px}
+
+/* ===== 顶栏 ===== */
+header{display:flex;align-items:center;gap:10px;padding:4px 2px}
+.brand{display:flex;align-items:center;gap:10px;flex:1;min-width:0}
+.logo{
+  width:40px;height:40px;flex:none;border-radius:12px;
+  background:linear-gradient(135deg,#ffb45e,#ff9f2e);
+  display:grid;place-items:center;color:#4a2800;
+  box-shadow:0 4px 14px rgba(255,159,46,.35);
+}
+.logo svg{width:22px;height:22px}
+.brand h1{font-size:19px;font-weight:800;letter-spacing:.5px;line-height:1.1}
+.brand p{font-size:12px;color:var(--txt-2);margin-top:2px}
+.status-dot{
+  flex:none;display:inline-flex;align-items:center;gap:6px;
+  font-size:12px;font-weight:600;color:var(--txt-2);
+  background:var(--panel);border:1px solid var(--line);
+  padding:6px 10px;border-radius:999px;
+}
+.status-dot .dot{width:8px;height:8px;border-radius:50%;background:var(--txt-2);transition:background .3s}
+.status-dot.on{color:#ffe1b0}
+.status-dot.on .dot{background:var(--sun);box-shadow:0 0 8px var(--sun);animation:pulse 1.4s infinite}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.5}}
+
+/* ===== 危险横幅 ===== */
+#dangerBanner{
+  display:none;align-items:center;gap:10px;
+  background:linear-gradient(90deg,#3a1414,#2a1215);
+  border:1px solid #6e2a2a;color:#ffd6d6;
+  padding:12px 14px;border-radius:var(--radius);
+  font-size:16px;font-weight:700;line-height:1.4;
+  box-shadow:var(--shadow);
+}
+#dangerBanner.show{display:flex;animation:dangerIn .25s ease-out}
+#dangerBanner .icon{flex:none;width:28px;height:28px;color:var(--danger);animation:blink 1s infinite}
+@keyframes dangerIn{from{opacity:0;transform:translateY(-6px)}to{opacity:1;transform:none}}
+@keyframes blink{0%,100%{opacity:1}50%{opacity:.35}}
+
+/* ===== 视频区 ===== */
+#camBox{
+  position:relative;border-radius:var(--radius);overflow:hidden;
+  background:#000;border:1px solid var(--line);
+  box-shadow:var(--shadow);
+}
+video{width:100%;display:block;aspect-ratio:4/3;object-fit:cover;background:#000}
+canvas{position:absolute;inset:0;width:100%;height:100%;pointer-events:none}
+#camPlaceholder{
+  position:absolute;inset:0;display:grid;place-items:center;text-align:center;
+  color:var(--txt-2);padding:20px;gap:8px;
+}
+#camPlaceholder svg{width:54px;height:54px;color:#3a4556;margin-bottom:6px}
+#camPlaceholder b{display:block;color:var(--txt);font-size:16px;margin-bottom:4px}
+#camBox.live #camPlaceholder{display:none}
+
+/* ===== 当前信息条 ===== */
+#nowCard{
+  display:flex;align-items:center;gap:12px;background:var(--panel);
+  border:1px solid var(--line);border-radius:var(--radius);padding:12px 14px;
+  min-height:62px;
+}
+#nowIcon{flex:none;width:34px;height:34px;border-radius:10px;display:grid;place-items:center;color:var(--txt-2);background:var(--panel-2)}
+#nowIcon svg{width:20px;height:20px}
+#nowIcon.danger{background:var(--danger-bg);color:var(--danger)}
+#nowIcon.warn{background:var(--warn-bg);color:var(--warn)}
+#nowIcon.ok{background:var(--ok-bg);color:var(--ok)}
+#nowIcon.info{background:var(--panel-2);color:var(--txt-2)}
+#nowText{flex:1;min-width:0}
+#nowText .t{font-size:17px;font-weight:700;line-height:1.3}
+#nowText .s{font-size:12px;color:var(--txt-2);margin-top:2px}
+
+/* ===== AI 提示条 ===== */
+#aiTip{
+  display:flex;gap:10px;align-items:flex-start;
+  background:linear-gradient(135deg,#1c1408,#181104);
+  border:1px solid #4a3410;color:#ffd9a0;
+  padding:10px 12px;border-radius:12px;font-size:14px;line-height:1.5;
+}
+#aiTip svg{flex:none;width:18px;height:18px;color:var(--sun);margin-top:2px}
+#aiTip .spark{color:var(--txt-2);font-size:12px;flex:none}
+
+/* ===== 按钮区 ===== */
+.controls{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.btn{
+  display:flex;flex-direction:column;align-items:center;justify-content:center;gap:6px;
+  min-height:76px;padding:12px;border:none;border-radius:14px;cursor:pointer;
+  font-family:inherit;color:#fff;font-weight:700;font-size:16px;line-height:1.2;
+  transition:transform .08s,filter .15s,background .2s;
+}
+.btn:active{transform:scale(.97)}
+.btn svg{width:24px;height:24px}
+.btn .sub{font-size:11px;font-weight:500;opacity:.8}
+.btn-primary{background:linear-gradient(135deg,#ffb45e,#ff9f2e);color:#3a2400}
+.btn-primary:hover{filter:brightness(1.06)}
+.btn-nav{background:linear-gradient(135deg,#13a8b8,#0e8ca6)}
+.btn-nav:hover{filter:brightness(1.06)}
+.btn-primary.running{background:linear-gradient(135deg,#2ecc8f,#1fb47c);color:#05241a}
+
+/* 底部紧急呼叫 */
+#sosWrap{margin-top:auto}
+#sosBtn{
+  width:100%;display:flex;align-items:center;justify-content:center;gap:10px;
+  min-height:64px;padding:16px;border:none;border-radius:14px;cursor:pointer;
+  background:linear-gradient(135deg,#ff5a5c,#e13b3d);color:#fff;
+  font-family:inherit;font-weight:800;font-size:19px;letter-spacing:1px;
+  box-shadow:0 6px 20px rgba(225,59,61,.4);transition:transform .08s,filter .15s;
+}
+#sosBtn:active{transform:scale(.98)}
+#sosBtn svg{width:24px;height:24px}
+#sosHint{text-align:center;font-size:11px;color:var(--txt-2);margin-top:6px}
+
+/* ===== 日志 ===== */
+#logHead{
+  display:flex;align-items:center;justify-content:space-between;
+  background:var(--panel);border:1px solid var(--line);border-bottom:none;
+  border-radius:12px 12px 0 0;padding:9px 12px;font-size:13px;color:var(--txt-2);
+  cursor:pointer;user-select:none;
+}
+#logHead b{color:var(--txt);font-size:13px;font-weight:600}
+#logHead .chev{transition:transform .2s}
+#logBody{max-height:0;overflow:hidden;transition:max-height .3s ease}
+#logBody.open{max-height:220px}
+#log{
+  height:180px;overflow-y:auto;padding:10px 12px;font-size:13px;line-height:1.6;
+  background:var(--panel);border:1px solid var(--line);border-radius:0 0 12px 12px;
+  white-space:pre-wrap;color:#c7d2e0;
+}
+#log .danger{color:#ff8f90}
+#log .warn{color:#ffb066}
+#log .ok{color:#7fe3bd}
+#log .info{color:#9aa7b8}
+
+/* 弱动效 */
+@media (prefers-reduced-motion:reduce){
+  *{animation:none!important;transition:none!important}
+}
+@media (min-width:768px){
+  .wrap{padding:20px}
+  .controls{grid-template-columns:1fr 1fr}
+  video{aspect-ratio:16/9}
+}
 </style>
 </head>
 <body>
-<div id="status">点击下方按钮开启</div>
-<div class="btn-row">
-  <button id="btnStart">🔊 开启播报</button>
-  <button id="btnAsk" class="secondary">🎙 我要问路</button>
+<div class="wrap">
+
+  <header>
+    <div class="brand">
+      <div class="logo" aria-hidden="true">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="4" fill="currentColor" stroke="none"/><path d="M12 2v2M12 20v2M2 12h2M20 12h2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M19.1 4.9l-1.4 1.4M6.3 17.7l-1.4 1.4"/></svg>
+      </div>
+      <div>
+        <h1>暖阳视界</h1>
+        <p>盲道路况 AI 播报</p>
+      </div>
+    </div>
+    <div class="status-dot" id="statusDot"><span class="dot"></span><span id="statusText">待开启</span></div>
+  </header>
+
+  <div id="dangerBanner" role="alert" aria-live="assertive">
+    <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 3 2 20h20L12 3z"/><path d="M12 9v5" stroke-linecap="round"/><circle cx="12" cy="17" r=".6" fill="currentColor" stroke="none"/></svg>
+    <span id="dangerText">危险！</span>
+  </div>
+
+  <div id="camBox">
+    <video id="video" autoplay playsinline muted></video>
+    <canvas id="canvas"></canvas>
+    <div id="camPlaceholder">
+      <div>
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="2" y="6" width="13" height="12" rx="2"/><path d="m15 10 5-3v10l-5-3"/></svg>
+        <b>摄像头待开启</b>
+        <span>点击下方「开启播报」开始识别路况</span>
+      </div>
+    </div>
+  </div>
+
+  <div id="nowCard">
+    <div id="nowIcon" aria-hidden="true">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 3"/></svg>
+    </div>
+    <div id="nowText">
+      <div class="t">等待开启</div>
+      <div class="s" id="nowSub">开启后实时播报前方路况</div>
+    </div>
+  </div>
+
+  <div id="aiTip" aria-live="polite">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 3v3M12 18v3M3 12h3M18 12h3M5.6 5.6l2.1 2.1M16.3 16.3l2.1 2.1M18.4 5.6l-2.1 2.1M7.7 16.3l-2.1 2.1"/><path d="M12 8a4 4 0 0 0-4 4h8a4 4 0 0 0-4-4z" fill="currentColor" stroke="none"/></svg>
+    <span id="aiTipText">AI 安全解说：开启后结合当前路况，为你生成一句行走建议。</span>
+  </div>
+
+  <div class="controls">
+    <button id="btnStart" class="btn btn-primary">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 11V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2v6"/><path d="M3 13a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2v4a2 2 0 0 1-2 2h-1"/><path d="M4 17h2v2H4z" fill="currentColor"/><path d="M14 11v6M12 13l2 2 2-2"/></svg>
+      <span id="btnStartText">开启播报</span>
+      <span class="sub" id="btnStartSub">识别盲道与障碍</span>
+    </button>
+    <button id="btnNav" class="btn btn-nav">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 11 21 3l-8 18-2.5-7L3 11z"/><path d="M10.5 14 21 3"/></svg>
+      <span>一键导航</span>
+      <span class="sub">打开高德地图</span>
+    </button>
+  </div>
+
+  <div id="logHead" role="button" tabindex="0" aria-expanded="false">
+    <span>运行日志</span>
+    <svg class="chev" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m6 9 6 6 6-6"/></svg>
+  </div>
+  <div id="logBody">
+    <div id="log">— 暖阳视界 已就绪，点击「开启播报」开始 —</div>
+  </div>
+
+  <div id="sosWrap">
+    <button id="sosBtn">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 16.9v3a2 2 0 0 1-2.2 2 19.8 19.8 0 0 1-8.6-3 19.5 19.5 0 0 1-6-6 19.8 19.8 0 0 1-3-8.7A2 2 0 0 1 4.1 2h3a2 2 0 0 1 2 1.7c.1 1 .4 2 .7 2.9a2 2 0 0 1-.5 2.1L8.1 9.9a16 16 0 0 0 6 6l1.2-1.2a2 2 0 0 1 2.1-.5c.9.3 1.9.6 2.9.7a2 2 0 0 1 1.7 2z"/></svg>
+      紧急呼叫亲人
+    </button>
+    <div id="sosHint">点击拨打 · 长按 2 秒修改联系人</div>
+  </div>
+
 </div>
-<div id="aiTip">AI 智能解说：开启后将由大模型结合当前路况生成安全建议</div>
-<div id="wrap">
-  <video id="video" autoplay playsinline muted></video>
-  <canvas id="canvas"></canvas>
-</div>
-<div id="log">— 暖阳视界 启动中 —</div>
 
 <script>
-/* ========== 基础配置 ========== */
-const targetClasses = ["person","bicycle","car","motorcycle","bus","truck","fire hydrant","traffic light","stop sign","bench","potted plant","dog","cat"];
-const CLASS_CN = {person:"行人",bicycle:"自行车",car:"汽车",motorcycle:"摩托车",bus:"公交车",truck:"卡车","fire hydrant":"消防栓","traffic light":"红绿灯","stop sign":"停车标志",bench:"长椅","parking meter":"停车计时器","potted plant":"盆栽",dog:"狗",cat:"猫"};
-const KNOWN = {person:1.7,bicycle:1.0,car:1.5,motorcycle:1.2,bus:3,truck:3,"fire hydrant":0.9,"traffic light":2.5,"stop sign":1,bench:0.8,"parking meter":1.2,"potted plant":0.6,dog:0.5,cat:0.3};
-const VFOV = 50 * Math.PI / 180;
-const DANGER = 3;
-const COOLDOWN = 3500;
-const AI_INTERVAL = 12000;
+/* ============================================================
+ * 暖阳视界 · 盲道路况 AI 播报（精进版）
+ * 1. 本地 AI 建议引擎兜底：远程 /api/llm 不可用时自动回退本地规则
+ * 2. 危险播报优先并可打断普通播报
+ * 3. 顶部危险横幅 + 当前信息卡实时反馈
+ * 4. 分步启动进度与加载错误提示
+ * ============================================================ */
+(function(){
+"use strict";
 
-const video=document.getElementById('video');
-const canvas=document.getElementById('canvas');
-const ctx=canvas.getContext('2d');
-const logDiv=document.getElementById('log');
-const statusDiv=document.getElementById('status');
-const aiTip=document.getElementById('aiTip');
-const btn=document.getElementById('btnStart');
-const btnAsk=document.getElementById('btnAsk');
+/* ---------- 基础配置 ---------- */
+var targetClasses=["person","bicycle","car","motorcycle","bus","truck","fire hydrant","traffic light","stop sign","bench","potted plant","dog","cat"];
+var CLASS_CN={person:"行人",bicycle:"自行车",car:"汽车",motorcycle:"摩托车",bus:"公交车",truck:"卡车","fire hydrant":"消防栓","traffic light":"红绿灯","stop sign":"停车标志",bench:"长椅","parking meter":"停车计时器","potted plant":"盆栽",dog:"狗",cat:"猫"};
+/* 各类物体在画面中的大致已知高度(米)，用于估算距离 */
+var KNOWN={person:1.7,bicycle:1.0,car:1.5,motorcycle:1.2,bus:3,truck:3,"fire hydrant":0.9,"traffic light":2.5,"stop sign":1,bench:0.8,"parking meter":1.2,"potted plant":0.6,dog:0.5,cat:0.3};
+var VFOV=35*Math.PI/180;
+var DANGER=3;              /* 距离小于该米数判为危险 */
+var DANGER_BOX_RATIO=0.25; /* 物体占画面高度比例超过该值判为危险 */
+var COOLDOWN=5000;         /* 同一物体重复播报冷却(ms) */
+var AI_INTERVAL=15000;     /* AI 建议间隔(ms) */
+var LOOP_DELAY=500;        /* 检测循环间隔(ms) */
 
-let model=null;
-let track=new Map();
-let isVoice=false;
-let lastObjects=[];
-let lastAiTime=0;
-let running=false;
+/* ---------- DOM ---------- */
+var video=document.getElementById('video');
+var canvas=document.getElementById('canvas');
+var ctx=canvas.getContext('2d');
+var logDiv=document.getElementById('log');
+var statusText=document.getElementById('statusText');
+var statusDot=document.getElementById('statusDot');
+var aiTipText=document.getElementById('aiTipText');
+var btnStart=document.getElementById('btnStart');
+var btnStartText=document.getElementById('btnStartText');
+var btnStartSub=document.getElementById('btnStartSub');
+var btnNav=document.getElementById('btnNav');
+var sosBtn=document.getElementById('sosBtn');
+var camBox=document.getElementById('camBox');
+var nowIcon=document.getElementById('nowIcon');
+var nowTextT=document.querySelector('#nowText .t');
+var nowTextS=document.getElementById('nowSub');
+var dangerBanner=document.getElementById('dangerBanner');
+var dangerText=document.getElementById('dangerText');
+var logHead=document.getElementById('logHead');
+var logBody=document.getElementById('logBody');
 
-/* ========== 语音播报队列 ========== */
-class VQ{
-  constructor(){this.q=[];this.p=false;}
-  speak(t){this.q.push(t);if(!this.p)this.go();}
-  go(){
-    if(!this.q.length){this.p=false;return;}
-    this.p=true;
-    const u=new SpeechSynthesisUtterance(this.q.shift());
-    u.lang='zh-CN'; u.rate=1.0; u.pitch=1.0;
-    u.onend=()=>{setTimeout(()=>this.go(),150)};
-    speechSynthesis.speak(u);
-  }
-}
-const vq=new VQ();
+/* ---------- 状态 ---------- */
+var model=null;
+var track=new Map();     /* 物体 id -> 上次播报时间 */
+var isVoice=false;
+var running=false;
+var lastObjects=[];
+var lastAiTime=0;
+var lastDanger=false;
 
-function log(m){
-  const d=new Date();
-  logDiv.innerText+=`[${String(d.getHours()).padStart(2,'0')}:${String(d.getMinutes()).padStart(2,'0')}:${String(d.getSeconds()).padStart(2,'0')}] ${m}\n`;
+/* ---------- 日志 ---------- */
+function log(m,cls){
+  var d=new Date();
+  var t=('0'+d.getHours()).slice(-2)+':'+('0'+d.getMinutes()).slice(-2)+':'+('0'+d.getSeconds()).slice(-2);
+  var span=document.createElement('span');
+  span.className=cls||'info';
+  span.textContent='['+t+'] '+m+'\n';
+  logDiv.appendChild(span);
   logDiv.scrollTop=logDiv.scrollHeight;
 }
 
-/* ========== 检测辅助 ========== */
+/* 日志折叠 */
+logHead.addEventListener('click',toggleLog);
+logHead.addEventListener('keydown',function(e){ if(e.key==='Enter'||e.key===' '){e.preventDefault();toggleLog();} });
+function toggleLog(){
+  var open=logBody.classList.toggle('open');
+  logHead.setAttribute('aria-expanded',open?'true':'false');
+  var chev=logHead.querySelector('.chev');
+  chev.style.transform=open?'rotate(180deg)':'';
+}
+
+/* ---------- 语音播报队列（危险可打断） ---------- */
+function VQ(){
+  this.q=[]; this.p=false;
+}
+VQ.prototype.speak=function(t,urgent){
+  if(urgent){
+    /* 危险播报：清空待播并打断当前，立即播报 */
+    this.q=[];
+    try{ speechSynthesis.cancel(); }catch(e){}
+    this.p=false;
+    this.q.push(t);
+    this.go();
+  }else{
+    this.q.push(t);
+    if(!this.p) this.go();
+  }
+};
+VQ.prototype.go=function(){
+  if(!this.q.length){this.p=false;return;}
+  this.p=true;
+  var self=this;
+  var u=new SpeechSynthesisUtterance(this.q.shift());
+  u.lang='zh-CN'; u.rate=1.0; u.pitch=1.0;
+  u.onend=function(){ setTimeout(function(){self.go();},180); };
+  u.onerror=function(){ setTimeout(function(){self.go();},180); };
+  speechSynthesis.speak(u);
+};
+var vq=new VQ();
+function speak(t,urgent){ try{ vq.speak(t,urgent); }catch(e){} }
+
+/* ---------- 检测辅助 ---------- */
 function clockDir(nx){
-  const dx=(nx-0.5)*2;
-  const a=dx*90;
-  let c=Math.round(a/30);
+  var dx=(nx-0.5)*2;
+  var a=dx*90;
+  var c=Math.round(a/30);
   if(c===0)return 12;
   if(c>0)return c;
   return 12+c;
 }
 function getDist(cls,h,vh){
-  const known=KNOWN[cls]||1;
-  const fp=(vh/2)/Math.tan(VFOV/2);
+  var known=KNOWN[cls]||1;
   if(h<=0)return 99;
+  var fp=(vh/2)/Math.tan(VFOV/2);
   return (known*fp)/h;
 }
 
-/* ========== 调用大模型（走自家后端代理，key 不暴露） ========== */
-async function callLLM(userText, contextObjects){
+/* ---------- AI 安全解说 ---------- */
+/* 先尝试远程大模型接口；不可用时回退到本地规则引擎，保证纯前端也能用 */
+async function callLLM(userText,objects){
   try{
-    const r=await fetch('/api/llm',{
-      method:'POST',
-      headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({user:userText, objects:contextObjects})
-    });
+    var ctrl=('AbortController' in window)?new AbortController():null;
+    var opt={method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({user:userText,objects:objects})};
+    if(ctrl){opt.signal=ctrl.signal; setTimeout(function(){ctrl.abort();},4000);}
+    var r=await fetch('/api/llm',opt);
     if(!r.ok) throw new Error('HTTP '+r.status);
-    const data=await r.json();
-    return data.reply;
+    var data=await r.json();
+    if(data && data.reply) return data.reply;
+    throw new Error('empty');
   }catch(e){
-    log('AI 调用失败:'+e.message);
-    return null;
+    return null; /* 回退本地 */
   }
 }
+/* 本地规则建议引擎：不依赖后端也能给出安全提醒 */
+function localSuggest(objs){
+  if(!objs.length) return '前方暂未检测到障碍，可以放心行走。';
+  var danger=objs.filter(function(o){return o.danger;});
+  if(danger.length){
+    var d=danger[0];
+    return '危险！前方'+d.dist+'米有'+d.cn+'，请立即停下或靠边绕行。';
+  }
+  var front=objs.filter(function(o){return o.isFront;});
+  if(front.length){
+    var f=front[0];
+    return '正前方'+f.dist+'米有'+f.cn+'，请放慢速度，注意避让。';
+  }
+  var vehicles=objs.filter(function(o){return ['汽车','摩托车','公交车','卡车'].indexOf(o.cn)>-1;});
+  if(vehicles.length){
+    var v=vehicles[0];
+    return v.dir+'方向有'+v.cn+'，请尽量靠路边行走。';
+  }
+  if(objs.length<=2){
+    return '前方'+objs[0].dir+'有'+objs[0].cn+',路况基本正常，注意脚下。';
+  }
+  return '前方行人或障碍较多，请放慢速度，听从提示音。';
+}
+async function runAi(){
+  var objs=lastObjects;
+  if(!objs.length){ aiTipText.textContent='AI 安全解说：当前画面未检测到障碍物，可以继续前行。'; return; }
+  var reply=await callLLM('请用一句话、口语化、30字以内，结合当前路况给视障行人一个安全提醒。',objs);
+  if(!reply) reply=localSuggest(objs);
+  aiTipText.textContent='AI 建议：'+reply;
+  speak(reply,false);
+  log('AI 建议：'+reply);
+}
 
-/* ========== 主检测循环 ========== */
+/* ---------- 状态辅助 ---------- */
+function setStatus(txt,cls){
+  statusText.textContent=txt;
+  statusDot.classList.toggle('on',cls==='on');
+}
+function setNow(state,title,sub){
+  nowIcon.className=state;
+  nowTextT.textContent=title;
+  nowTextS.textContent=sub||'';
+}
+function showDanger(text){
+  dangerText.textContent=text;
+  dangerBanner.classList.add('show');
+}
+function hideDanger(){ dangerBanner.classList.remove('show'); }
+
+/* ---------- 主检测循环 ---------- */
 async function loop(){
   if(!running) return;
-  if(!model||!video.srcObject){ setTimeout(loop,300); return; }
+  if(!model || !video.srcObject || !video.videoWidth){ setTimeout(loop,LOOP_DELAY); return; }
   try{
-    const preds=await model.detect(video,30,0.4,0.5);
-    ctx.clearRect(0,0,canvas.width,canvas.height);
-    const vw=video.videoWidth, vh=video.videoHeight;
+    var preds=await model.detect(video,30,0.4,0.5);
+    var vw=video.videoWidth, vh=video.videoHeight;
     canvas.width=vw; canvas.height=vh;
-    const now=Date.now();
-    const objs=[];
+    ctx.clearRect(0,0,vw,vh);
+    var now=Date.now();
+    var objs=[];
 
-    for(const o of preds){
-      const cls=o.class;
-      if(targetClasses.indexOf(cls)<0) continue;
-      const b=o.bbox, x=b[0], y=b[1], w=b[2], h=b[3];
-      const nx=(x+w/2)/vw, ny=(y+h/2)/vh;
-      const dist=getDist(cls,h,vh);
-      const danger=dist<DANGER;
-      const dir=clockDir(nx);
-      const clockName=dir===12?'正前方':dir+'点钟方向';
-      const cn=CLASS_CN[cls]||cls;
+    for(var i=0;i<preds.length;i++){
+      var o=preds[i];
+      if(targetClasses.indexOf(o.class)<0) continue;
+      var b=o.bbox,x=b[0],y=b[1],w=b[2],h=b[3];
+      var nx=(x+w/2)/vw;
+      var dist=getDist(o.class,h,vh);
+      var boxRatio=h/vh;
+      var danger=dist<DANGER||boxRatio>DANGER_BOX_RATIO;
+      var dir=clockDir(nx);
+      var isFront=(dir===12);
+      var cn=CLASS_CN[o.class]||o.class;
 
-      ctx.strokeStyle=danger?'#ff3333':'#ffdd00';
+      ctx.strokeStyle=danger?'#ff4d4f':(isFront?'#ff9f2e':'#ffd166');
       ctx.lineWidth=3; ctx.strokeRect(x,y,w,h);
-      ctx.font='16px sans-serif';
-      ctx.fillStyle=danger?'#ff3333':'#ffdd00';
-      ctx.fillText(`${cn} ${dist.toFixed(1)}m`,x,y-6);
+      ctx.font='15px system-ui,sans-serif';
+      ctx.fillStyle=danger?'#ff4d4f':(isFront?'#ff9f2e':'#ffd166');
+      ctx.fillText(cn+' '+dist.toFixed(1)+'m',x,y-6);
 
-      objs.push({cls:cn, dist:dist.toFixed(1), dir:clockName, danger});
+      objs.push({cls:o.class,cn:cn,dist:dist,dir:dir,isFront:isFront,danger:danger,nx:nx});
+    }
 
-      const id=cls+'_'+Math.round(nx*10)+'_'+Math.round(ny*10);
+    /* 危险优先 > 正前方 > 距离近 */
+    objs.sort(function(a,b){
+      if(a.danger!==b.danger) return a.danger?-1:1;
+      if(a.isFront!==b.isFront) return a.isFront?-1:1;
+      return a.dist-b.dist;
+    });
+
+    var top=objs[0];
+    if(top){
+      var clockName=top.dir===12?'正前方':top.dir+'点钟方向';
+      var id=top.cls+'_'+Math.round(top.nx*10);
       if(now-(track.get(id)||0)>=COOLDOWN){
         track.set(id,now);
-        const prefix=danger?'危险！':'';
-        const txt=`${prefix}${clockName}，${dist.toFixed(1)}米，${cn}`;
-        vq.speak(txt);
-        log((danger?'⚠️ ':'📍 ')+txt);
+        var prefix='';
+        if(top.danger) prefix='危险！';
+        else if(top.isFront) prefix='前方有障碍，请注意：';
+        var txt=prefix+clockName+'，'+top.dist.toFixed(1)+'米，'+top.cn;
+        speak(txt,!!top.danger);
+        log(txt,top.danger?'danger':(top.isFront?'warn':'info'));
       }
     }
-    lastObjects=objs;
-    for(const [k,t] of track){ if(now-t>COOLDOWN*3) track.delete(k); }
 
-    // 每 12 秒，把当前路况交给大模型做一次综合安全解说
-    if(now-lastAiTime>=AI_INTERVAL && objs.length>0){
-      lastAiTime=now;
-      const aiReply=await callLLM('请用一句话、口语化、30字以内，结合当前路况给视障行人一个安全提醒。', objs);
-      if(aiReply){
-        aiTip.textContent='🤖 AI：'+aiReply;
-        vq.speak(aiReply);
-        log('🤖 AI 解说：'+aiReply);
+    /* 更新信息卡与危险横幅 */
+    if(top){
+      var cardTitle=clockName+' '+top.dist.toFixed(1)+'米 · '+top.cn;
+      if(top.danger){
+        setNow('danger',cardTitle,'危险！请停下或绕行');
+        showDanger('危险！'+cardTitle);
+      }else if(top.isFront){
+        setNow('warn',cardTitle,'注意前方障碍，放慢速度');
+        hideDanger();
+      }else{
+        setNow('info',cardTitle,clockName+'方向 '+top.dist.toFixed(1)+'米');
+        hideDanger();
       }
+    }else{
+      setNow('ok','前方畅通','未检测到明显障碍，请继续行走');
+      hideDanger();
     }
-  }catch(e){ log('识别出错:'+e.message); }
-  setTimeout(loop,600);
+
+    lastObjects=objs.map(function(o){return {cls:o.cn,dist:o.dist.toFixed(1),dir:o.dir===12?'正前方':o.dir+'点钟方向',danger:o.danger};});
+
+    /* 清理过期冷却记录 */
+    for(var it=track.entries();;){
+      var e=it.next(); if(e.done)break;
+      if(now-e.value[1]>COOLDOWN*3) track.delete(e.value[0]);
+    }
+
+    /* 定时 AI 建议 */
+    if(now-lastAiTime>=AI_INTERVAL){
+      lastAiTime=now;
+      if(lastObjects.length) runAi();
+    }
+  }catch(err){
+    log('识别出错：'+err.message,'warn');
+  }
+  setTimeout(loop,LOOP_DELAY);
 }
 
-/* ========== 开启按钮 ========== */
-btn.onclick=async()=>{
+/* ---------- 开启播报 ---------- */
+btnStart.addEventListener('click',onStart);
+function onStart(){
   if(!isVoice){
-    vq.speak('语音已开启，暖阳视界开始播报');
-    isVoice=true; running=true;
+    speak('语音已开启，暖阳视界开始播报',true);
+    isVoice=true;
   }
-  statusDiv.innerText='正在开启摄像头…';
+  if(running){
+    /* 再次点击 = 停止 */
+    running=false; isVoice=false;
+    btnStartText.textContent='开启播报';
+    btnStartSub.textContent='识别盲道与障碍';
+    btnStart.classList.remove('running');
+    setStatus('已停止');
+    setNow('info','已停止','点击上方按钮重新开启');
+    hideDanger();
+    return;
+  }
+  doStart();
+}
+async function doStart(){
+  setStatus('请求摄像头…');
+  setNow('info','正在开启…','');
   try{
     if(!video.srcObject){
-      const stream=await navigator.mediaDevices.getUserMedia({video:{facingMode:'environment'}});
+      var stream=await navigator.mediaDevices.getUserMedia({video:{facingMode:'environment'}});
       video.srcObject=stream;
+      camBox.classList.add('live');
     }
-    statusDiv.innerText='正在加载 AI 模型…';
-    model=await cocoSsd.load();
-    statusDiv.innerText='✅ 运行中：识别盲道物体并播报（含大模型安全解说）';
-    log('✅ 模型加载完成，盲道模式 + AI 解说已启用');
+    setStatus('加载 AI 模型…');
+    log('正在加载 AI 模型，首次约需数秒…');
+    if(!model) model=await cocoSsd.load();
+    running=true;
+    isVoice=true;
+    btnStartText.textContent='停止播报';
+    btnStartSub.textContent='点按可随时停止';
+    btnStart.classList.add('running');
+    setStatus('识别中','on');
+    setNow('ok','已就绪','开始识别盲道与障碍');
+    log('✅ 模型加载完成，开始播报','ok');
     loop();
   }catch(e){
-    statusDiv.innerText='出错了:'+e.message;
-    log('错误:'+e.message);
+    setStatus('出错：'+e.message);
+    log('错误：'+e.message,'danger');
+    setNow('danger','启动失败','请检查摄像头权限后重试');
   }
-};
-
-/* ========== 语音问答按钮 ========== */
-const SR=window.SpeechRecognition||window.webkitSpeechRecognition;
-let sr=null, asking=false;
-if(SR){
-  sr=new SR();
-  sr.lang='zh-CN'; sr.interimResults=false; sr.maxAlternatives=1;
-  sr.onresult=async(e)=>{
-    const q=e.results[0][0].transcript;
-    log('🎙 你问：'+q);
-    vq.speak('你问的是，'+q);
-    btnAsk.classList.remove('listening');
-    btnAsk.textContent='🎙 我要问路';
-    const reply=await callLLM(q, lastObjects);
-    if(reply){
-      aiTip.textContent='🤖 AI：'+reply;
-      vq.speak(reply);
-      log('🤖 AI 答：'+reply);
-    }else{
-      vq.speak('网络或大模型暂时不可用，请稍后再试');
-    }
-    asking=false;
-  };
-  sr.onerror=(e)=>{ log('语音识别错误:'+e.error); asking=false; btnAsk.classList.remove('listening'); btnAsk.textContent='🎙 我要问路'; };
 }
-btnAsk.onclick=()=>{
-  if(!SR){ alert('当前浏览器不支持语音识别，请用 Chrome/Edge'); return; }
-  if(asking){ sr.stop(); asking=false; btnAsk.classList.remove('listening'); btnAsk.textContent='🎙 我要问路'; return; }
-  if(!running){ alert('请先点击"开启播报"，让摄像头工作起来'); return; }
-  asking=true;
-  btnAsk.classList.add('listening');
-  btnAsk.textContent='🛑 聆听中…再点结束';
-  vq.speak('请说你的问题，比如，前面能走吗？');
-  sr.start();
-};
+
+/* ---------- 紧急呼叫 ---------- */
+var sosPhone=localStorage.getItem('sosPhone')||'';
+function askPhone(){
+  var p=prompt('紧急联系人电话（亲人/朋友）:',sosPhone||'');
+  if(p){
+    sosPhone=p.trim();
+    localStorage.setItem('sosPhone',sosPhone);
+    speak('紧急联系人已设置',true);
+    log('紧急联系人已设置','ok');
+  }
+}
+if(!sosPhone){ /* 首次不强弹，首次点击时再引导 */ }
+sosBtn.addEventListener('click',function(){
+  if(!sosPhone){ askPhone(); if(!sosPhone) return; }
+  speak('正在拨打紧急联系人',true);
+  log('拨打紧急联系人 '+sosPhone,'danger');
+  window.location.href='tel:'+sosPhone;
+});
+var sosTimer=null;
+sosBtn.addEventListener('touchstart',function(){
+  sosTimer=setTimeout(function(){ askPhone(); },2000);
+});
+sosBtn.addEventListener('touchend',function(){ if(sosTimer)clearTimeout(sosTimer); });
+sosBtn.addEventListener('touchmove',function(){ if(sosTimer)clearTimeout(sosTimer); });
+
+/* ---------- 一键导航 ---------- */
+btnNav.addEventListener('click',function(){
+  speak('正在打开地图导航',true);
+  log('打开高德地图导航','info');
+  window.open('https://uri.amap.com/marker?name=当前位置&src=nuanyangshijie','_blank');
+});
+
+/* ---------- 持续语音监听（开启后自动常驻，可用说指令） ---------- */
+var SR=window.SpeechRecognition||window.webkitSpeechRecognition;
+if(SR){
+  var sr=new SR();
+  sr.lang='zh-CN';
+  sr.continuous=true;
+  sr.interimResults=false;
+  sr.maxAlternatives=1;
+  function startListening(){ try{ sr.start(); }catch(e){} }
+  window.addEventListener('load',function(){
+    setTimeout(startListening,1200);
+    speak('语音助手已开启。说「开始」启动播报，说「打电话」联系亲人，说「导航」打开地图。',false);
+  });
+  sr.onresult=function(e){
+    var text=e.results[e.results.length-1][0].transcript;
+    log('听到语音：'+text);
+    if(/开始|开启|播报|走/.test(text)){ speak('好的，启动播报',true); onStart(); }
+    else if(/打电话|救命|紧急|亲人|电话/.test(text)){ speak('好的，正在拨打亲人',true); sosBtn.click(); }
+    else if(/导航|地图|怎么走/.test(text)){ speak('好的，打开地图',true); btnNav.click(); }
+  };
+  sr.onend=function(){ setTimeout(startListening,2000); };
+  sr.onerror=function(){ /* 部分设备无 Google 服务，静默容错 */ };
+}else{
+  log('当前设备不支持语音指令，可使用按钮操作','info');
+}
+})();
 </script>
 </body>
 </html>
