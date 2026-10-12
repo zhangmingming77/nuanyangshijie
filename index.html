@@ -2,1081 +2,339 @@
 <html lang="zh-CN">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<title>暖阳视界 · 盲道路况 AI 播报</title>
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>暖阳视界 · 盲道路况AI播报</title>
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Ccircle cx='32' cy='32' r='28' fill='%23ff9f2e'/%3E%3Ccircle cx='32' cy='32' r='16' fill='%23fff4e0'/%3E%3C/svg%3E">
 <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.20.0/dist/tf.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/coco-ssd@2.2.3/dist/coco-ssd.min.js"></script>
 <style>
-  :root{
-    --bg:#07090d;
-    --bg-2:#0c1016;
-    --panel:rgba(255,255,255,0.06);
-    --panel-2:rgba(255,255,255,0.04);
-    --line:rgba(255,255,255,0.08);
-    --line-strong:rgba(255,255,255,0.14);
-    --txt:#f6f8fb;
-    --txt-2:#9aa7b8;
-    --txt-3:#6b7789;
-    --sun:#ff9f2e;
-    --sun-soft:#ffd8a8;
-    --sun-glow:rgba(255,159,46,0.35);
-    --ok:#2ecc8f;
-    --ok-bg:rgba(46,204,143,0.12);
-    --warn:#ffb066;
-    --warn-bg:rgba(255,176,102,0.14);
-    --danger:#ff5a5c;
-    --danger-bg:rgba(255,90,92,0.16);
-    --radius:22px;
-    --radius-sm:14px;
-    --shadow:0 20px 40px rgba(0,0,0,0.35);
-    --shadow-soft:0 10px 24px rgba(0,0,0,0.25);
-  }
-
-  *{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent}
-  html,body{height:100%}
-  body{
-    background:
-      radial-gradient(1200px 500px at 80% -10%, rgba(255,159,46,0.12), transparent 60%),
-      radial-gradient(900px 400px at 10% 110%, rgba(46,204,143,0.08), transparent 60%),
-      linear-gradient(180deg,#07090d,#0c1016);
-    color:var(--txt);
-    font-family:-apple-system,BlinkMacSystemFont,"PingFang SC","Microsoft YaHei",system-ui,sans-serif;
-    display:flex;flex-direction:column;min-height:100vh;
-    padding-top:env(safe-area-inset-top);
-    padding-bottom:env(safe-area-inset-bottom);
-  }
-
-  .wrap{
-    flex:1;
-    display:flex;
-    flex-direction:column;
-    max-width:640px;
-    margin:0 auto;
-    width:100%;
-    padding:14px;
-    gap:14px;
-  }
-
-  /* ===== 顶栏 ===== */
-  header{
-    display:flex;
-    align-items:center;
-    gap:12px;
-    padding:6px 4px;
-  }
-
-  .brand{
-    display:flex;
-    align-items:center;
-    gap:12px;
-    flex:1;
-    min-width:0;
-  }
-
-  .logo{
-    width:46px;
-    height:46px;
-    flex:none;
-    border-radius:16px;
-    background:linear-gradient(135deg,#ffb45e,#ff9f2e);
-    display:grid;
-    place-items:center;
-    color:#3a2400;
-    box-shadow:0 8px 20px var(--sun-glow);
-  }
-
-  .logo svg{width:24px;height:24px}
-
-  .brand h1{
-    font-size:20px;
-    font-weight:800;
-    letter-spacing:.5px;
-    line-height:1.1;
-  }
-
-  .brand p{
-    font-size:12px;
-    color:var(--txt-2);
-    margin-top:3px;
-  }
-
-  .status-dot{
-    flex:none;
-    display:inline-flex;
-    align-items:center;
-    gap:8px;
-    font-size:12px;
-    font-weight:700;
-    color:var(--txt-2);
-    background:var(--panel);
-    border:1px solid var(--line);
-    padding:8px 12px;
-    border-radius:999px;
-    backdrop-filter:blur(10px);
-  }
-
-  .status-dot .dot{
-    width:9px;
-    height:9px;
-    border-radius:50%;
-    background:var(--txt-3);
-    transition:background .3s, box-shadow .3s;
-  }
-
-  .status-dot.on{
-    color:#ffe1b0;
-    border-color:rgba(255,159,46,0.35);
-    background:rgba(255,159,46,0.1);
-  }
-
-  .status-dot.on .dot{
-    background:var(--ok);
-    box-shadow:0 0 10px var(--ok);
-    animation:pulse 1.4s infinite;
-  }
-
-  @keyframes pulse{
-    0%,100%{opacity:1}
-    50%{opacity:.55}
-  }
-
-  /* ===== 危险横幅 ===== */
-  #dangerBanner{
-    display:none;
-    align-items:center;
-    gap:12px;
-    background:linear-gradient(135deg,rgba(255,90,92,0.18),rgba(255,90,92,0.08));
-    border:1px solid rgba(255,90,92,0.35);
-    color:#ffd6d6;
-    padding:14px 16px;
-    border-radius:var(--radius);
-    font-size:16px;
-    font-weight:800;
-    line-height:1.4;
-    box-shadow:var(--shadow-soft);
-  }
-
-  #dangerBanner.show{display:flex;animation:dangerIn .25s ease-out}
-
-  #dangerBanner .icon{
-    flex:none;
-    width:30px;
-    height:30px;
-    color:var(--danger);
-    animation:blink 1s infinite;
-  }
-
-  @keyframes dangerIn{
-    from{opacity:0;transform:translateY(-6px)}
-    to{opacity:1;transform:none}
-  }
-
-  @keyframes blink{
-    0%,100%{opacity:1}
-    50%{opacity:.4}
-  }
-
-  /* ===== 视频区 ===== */
-  #camBox{
-    position:relative;
-    border-radius:var(--radius);
-    overflow:hidden;
-    background:#000;
-    border:1px solid var(--line);
-    box-shadow:var(--shadow);
-  }
-
-  video{
-    width:100%;
-    display:block;
-    aspect-ratio:4/3;
-    object-fit:cover;
-    background:#000;
-  }
-
-  canvas{
-    position:absolute;
-    inset:0;
-    width:100%;
-    height:100%;
-    pointer-events:none;
-  }
-
-  #camPlaceholder{
-    position:absolute;
-    inset:0;
-    display:grid;
-    place-items:center;
-    text-align:center;
-    color:var(--txt-2);
-    padding:24px;
-    gap:10px;
-  }
-
-  #camPlaceholder svg{
-    width:58px;
-    height:58px;
-    color:#3a4556;
-    margin-bottom:6px;
-  }
-
-  #camPlaceholder b{
-    display:block;
-    color:var(--txt);
-    font-size:17px;
-    margin-bottom:4px;
-  }
-
-  #camPlaceholder span{
-    font-size:13px;
-    color:var(--txt-2);
-  }
-
-  #camBox.live #camPlaceholder{display:none}
-
-  /* ===== 当前信息卡片 ===== */
-  #nowCard{
-    display:flex;
-    align-items:center;
-    gap:14px;
-    background:var(--panel);
-    border:1px solid var(--line);
-    border-radius:var(--radius);
-    padding:16px;
-    min-height:74px;
-    backdrop-filter:blur(14px);
-    box-shadow:var(--shadow-soft);
-  }
-
-  #nowIcon{
-    flex:none;
-    width:42px;
-    height:42px;
-    border-radius:14px;
-    display:grid;
-    place-items:center;
-    color:var(--txt-2);
-    background:var(--panel-2);
-  }
-
-  #nowIcon svg{width:22px;height:22px}
-
-  #nowIcon.danger{background:var(--danger-bg);color:var(--danger)}
-  #nowIcon.warn{background:var(--warn-bg);color:var(--warn)}
-  #nowIcon.ok{background:var(--ok-bg);color:var(--ok)}
-  #nowIcon.info{background:var(--panel-2);color:var(--txt-2)}
-
-  #nowText{flex:1;min-width:0}
-
-  #nowText .t{
-    font-size:18px;
-    font-weight:800;
-    line-height:1.3;
-  }
-
-  #nowText .s{
-    font-size:13px;
-    color:var(--txt-2);
-    margin-top:4px;
-  }
-
-  /* ===== AI 提示卡片 ===== */
-  #aiTip{
-    display:flex;
-    gap:12px;
-    align-items:flex-start;
-    background:linear-gradient(135deg,rgba(255,159,46,0.14),rgba(255,159,46,0.04));
-    border:1px solid rgba(255,159,46,0.28);
-    color:var(--sun-soft);
-    padding:14px 16px;
-    border-radius:var(--radius);
-    font-size:14px;
-    line-height:1.6;
-    box-shadow:var(--shadow-soft);
-  }
-
-  #aiTip svg{
-    flex:none;
-    width:20px;
-    height:20px;
-    color:var(--sun);
-    margin-top:2px;
-  }
-
-  #aiTip .spark{
-    color:var(--txt-2);
-    font-size:12px;
-    flex:none;
-  }
-
-  /* ===== 按钮区 ===== */
-  .controls{
-    display:grid;
-    grid-template-columns:1fr 1fr;
-    gap:12px;
-  }
-
-  .btn{
-    display:flex;
-    flex-direction:column;
-    align-items:center;
-    justify-content:center;
-    gap:7px;
-    min-height:82px;
-    padding:14px;
-    border:none;
-    border-radius:18px;
-    cursor:pointer;
-    font-family:inherit;
-    color:#fff;
-    font-weight:800;
-    font-size:16px;
-    line-height:1.2;
-    transition:transform .08s, filter .15s, background .2s;
-    border:1px solid var(--line);
-    background:var(--panel);
-  }
-
-  .btn:active{transform:scale(.97)}
-
-  .btn svg{width:24px;height:24px}
-
-  .btn .sub{
-    font-size:11px;
-    font-weight:600;
-    color:var(--txt-2);
-  }
-
-  .btn-primary{
-    background:linear-gradient(135deg,#ffb45e,#ff9f2e);
-    color:#3a2400;
-    border-color:transparent;
-    box-shadow:0 12px 24px var(--sun-glow);
-  }
-
-  .btn-primary:hover{filter:brightness(1.06)}
-
-  .btn-nav{
-    background:linear-gradient(135deg,#13a8b8,#0e8ca6);
-    color:#031418;
-    border-color:transparent;
-    box-shadow:0 12px 24px rgba(14,140,166,0.25);
-  }
-
-  .btn-nav:hover{filter:brightness(1.06)}
-
-  .btn-primary.running{
-    background:linear-gradient(135deg,#2ecc8f,#1fb47c);
-    color:#05241a;
-    box-shadow:0 12px 24px rgba(46,204,143,0.28);
-  }
-
-  /* 底部紧急呼叫 */
-  #sosWrap{margin-top:auto}
-
-  #sosBtn{
-    width:100%;
-    display:flex;
-    align-items:center;
-    justify-content:center;
-    gap:12px;
-    min-height:68px;
-    padding:16px;
-    border:none;
-    border-radius:18px;
-    cursor:pointer;
-    background:linear-gradient(135deg,#ff5a5c,#e13b3d);
-    color:#fff;
-    font-family:inherit;
-    font-weight:800;
-    font-size:19px;
-    letter-spacing:1px;
-    box-shadow:0 10px 24px rgba(225,59,61,0.35);
-    transition:transform .08s, filter .15s;
-  }
-
-  #sosBtn:active{transform:scale(.98)}
-
-  #sosBtn svg{width:24px;height:24px}
-
-  #sosHint{
-    text-align:center;
-    font-size:12px;
-    color:var(--txt-2);
-    margin-top:8px;
-  }
-
-  /* ===== 日志 ===== */
-  #logHead{
-    display:flex;
-    align-items:center;
-    justify-content:space-between;
-    background:var(--panel);
-    border:1px solid var(--line);
-    border-bottom:none;
-    border-radius:16px 16px 0 0;
-    padding:10px 14px;
-    font-size:13px;
-    color:var(--txt-2);
-    cursor:pointer;
-    user-select:none;
-  }
-
-  #logHead b{
-    color:var(--txt);
-    font-size:14px;
-    font-weight:700;
-  }
-
-  #logHead .chev{transition:transform .2s}
-
-  #logBody{
-    max-height:0;
-    overflow:hidden;
-    transition:max-height .3s ease;
-  }
-
-  #logBody.open{max-height:240px}
-
-  #log{
-    height:200px;
-    overflow-y:auto;
-    padding:12px 14px;
-    font-size:13px;
-    line-height:1.6;
-    background:var(--panel);
-    border:1px solid var(--line);
-    border-radius:0 0 16px 16px;
-    white-space:pre-wrap;
-    color:#c7d2e0;
-  }
-
-  #log .danger{color:#ff8f90}
-  #log .warn{color:#ffb066}
-  #log .ok{color:#7fe3bd}
-  #log .info{color:#9aa7b8}
-
-  /* 弱动效 */
-  @media (prefers-reduced-motion:reduce){
-    *{animation:none!important;transition:none!important}
-  }
-
-  @media (min-width:768px){
-    .wrap{padding:24px}
-    video{aspect-ratio:16/9}
-  }
+:root{
+  --bg:#07090d;--bg-2:#0c1016;
+  --panel:rgba(255,255,255,0.06);--panel-2:rgba(255,255,255,0.04);
+  --line:rgba(255,255,255,0.08);--line-strong:rgba(255,255,255,0.14);
+  --txt:#f6f8fb;--txt-2:#9aa7b8;--txt-3:#6b7789;
+  --sun:#ff9f2e;--sun-soft:#ffd8a8;--sun-glow:rgba(255,159,46,0.35);
+  --ok:#2ecc8f;--ok-bg:rgba(46,204,143,0.12);
+  --warn:#ffb066;--warn-bg:rgba(255,176,102,0.14);
+  --danger:#ff5a5c;--danger-bg:rgba(255,90,92,0.16);
+  --radius:22px;--radius-sm:14px;
+  --shadow:0 20px 40px rgba(0,0,0,0.35);--shadow-soft:0 10px 24px rgba(0,0,0,0.25);
+}
+*{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent}
+html,body{height:100%}
+body{
+  background:radial-gradient(1200px 500px at 80% -10%,rgba(255,159,46,0.12),transparent 60%),
+  radial-gradient(900px 400px at 10% 110%,rgba(46,204,143,0.08),transparent 60%),
+  linear-gradient(180deg,#07090d,#0c1016);
+  color:var(--txt);font-family:system-ui,sans-serif;
+  display:flex;flex-direction:column;min-height:100vh;
+  padding-top:env(safe-area-inset-top);padding-bottom:env(safe-area-inset-bottom);
+}
+.wrap{flex:1;display:flex;flex-direction:column;max-width:640px;margin:0 auto;width:100%;padding:14px;gap:14px}
+header{display:flex;align-items:center;gap:12px;padding:6px 4px}
+.brand{display:flex;align-items:center;gap:12px;flex:1;min-width:0}
+.logo{width:46px;height:46px;border-radius:16px;background:linear-gradient(135deg,#ffb45e,#ff9f2e);
+display:grid;place-items:center;color:#3a2400;box-shadow:0 8px 20px var(--sun-glow)}
+.logo svg{width:24px;height:24px}
+.brand h1{font-size:20px;font-weight:800;letter-spacing:.5px}
+.brand p{font-size:12px;color:var(--txt-2);margin-top:3px}
+.status-dot{display:inline-flex;align-items:center;gap:8px;font-size:12px;font-weight:700;color:var(--txt-2);
+background:var(--panel);border:1px solid var(--line);padding:8px 12px;border-radius:999px;backdrop-filter:blur(10px)}
+.status-dot .dot{width:9px;height:9px;border-radius:50%;background:var(--txt-3);transition:background .3s,box-shadow .3s}
+.status-dot.on{color:#ffe1b0;border-color:rgba(255,159,46,0.35);background:rgba(255,159,46,0.1)}
+.status-dot.on .dot{background:var(--ok);box-shadow:0 0 10px var(--ok);animation:pulse 1.4s infinite}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.55}}
+#dangerBanner{display:none;align-items:center;gap:12px;background:linear-gradient(135deg,rgba(255,90,92,0.18),rgba(255,90,92,0.08));
+border:1px solid rgba(255,90,92,0.35);color:#ffd6d6;padding:14px 16px;border-radius:var(--radius);
+font-size:16px;font-weight:800;box-shadow:var(--shadow-soft)}
+#dangerBanner.show{display:flex;animation:dangerIn .25s ease-out}
+#dangerBanner .icon{width:30px;height:30px;color:var(--danger);animation:blink 1s infinite}
+@keyframes dangerIn{from{opacity:0;transform:translateY(-6px)}to{opacity:1}}
+@keyframes blink{0%,100%{opacity:1}50%{opacity:.4}}
+#camBox{position:relative;border-radius:var(--radius);overflow:hidden;background:#000;border:1px solid var(--line);box-shadow:var(--shadow)}
+video{width:100%;display:block;aspect-ratio:4/3;object-fit:cover;background:#000}
+canvas{position:absolute;inset:0;width:100%;height:100%;pointer-events:none}
+#camPlaceholder{position:absolute;inset:0;display:grid;place-items:center;text-align:center;color:var(--txt-2);padding:24px;gap:10px}
+#camPlaceholder svg{width:58px;height:58px;color:#3a4556}
+#camPlaceholder b{display:block;color:var(--txt);font-size:17px}
+#camPlaceholder span{font-size:13px;color:var(--txt-2)}
+#camBox.live #camPlaceholder{display:none}
+#nowCard{display:flex;align-items:center;gap:14px;background:var(--panel);border:1px solid var(--line);
+border-radius:var(--radius);padding:16px;min-height:74px;backdrop-filter:blur(14px);box-shadow:var(--shadow-soft)}
+#nowIcon{width:42px;height:42px;border-radius:14px;display:grid;place-items:center;color:var(--txt-2);background:var(--panel-2)}
+#nowIcon svg{width:22px;height:22px}
+#nowIcon.danger{background:var(--danger-bg);color:var(--danger)}
+#nowIcon.warn{background:var(--warn-bg);color:var(--warn)}
+#nowIcon.ok{background:var(--ok-bg);color:var(--ok)}
+#nowText{flex:1;min-width:0}
+#nowText .t{font-size:18px;font-weight:800;line-height:1.3}
+#nowText .s{font-size:13px;color:var(--txt-2);margin-top:4px}
+#aiTip{display:flex;gap:12px;align-items:flex-start;background:linear-gradient(135deg,rgba(255,159,46,0.14),rgba(255,159,46,0.04));
+border:1px solid rgba(255,159,46,0.28);color:var(--sun-soft);padding:14px 16px;border-radius:var(--radius);
+font-size:14px;line-height:1.6;box-shadow:var(--shadow-soft)}
+#aiTip svg{width:20px;height:20px;color:var(--sun);margin-top:2px}
+.controls{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+.btn{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:7px;min-height:82px;padding:14px;
+border:none;border-radius:18px;cursor:pointer;color:#fff;font-weight:800;font-size:16px;transition:transform .08s,filter .15s}
+.btn:active{transform:scale(.97)}
+.btn svg{width:24px;height:24px}
+.btn .sub{font-size:11px;font-weight:600;opacity:.8}
+.btn-primary{background:linear-gradient(135deg,#ffb45e,#ff9f2e);color:#3a2400;box-shadow:0 12px 24px var(--sun-glow)}
+.btn-primary.running{background:linear-gradient(135deg,#2ecc8f,#1fb47c);color:#05241a;box-shadow:0 12px 24px rgba(46,204,143,0.28)}
+.btn-nav{background:linear-gradient(135deg,#13a8b8,#0e8ca6);box-shadow:0 12px 24px rgba(14,140,166,0.25)}
+#sosWrap{margin-top:auto}
+#sosBtn{width:100%;display:flex;align-items:center;justify-content:center;gap:12px;min-height:68px;padding:16px;
+border:none;border-radius:18px;cursor:pointer;background:linear-gradient(135deg,#ff5a5c,#e13b3d);color:#fff;
+font-weight:800;font-size:19px;box-shadow:0 10px 24px rgba(225,59,61,0.35);transition:transform .08s}
+#sosBtn:active{transform:scale(.98)}
+#sosBtn svg{width:24px;height:24px}
+#sosHint{text-align:center;font-size:12px;color:var(--txt-2);margin-top:8px}
+#logHead{display:flex;align-items:center;justify-content:space-between;background:var(--panel);border:1px solid var(--line);
+border-bottom:none;border-radius:16px 16px 0 0;padding:10px 14px;font-size:13px;color:var(--txt-2);cursor:pointer}
+#logHead b{color:var(--txt);font-size:14px;font-weight:700}
+#logBody{max-height:0;overflow:hidden;transition:max-height .3s ease}
+#logBody.open{max-height:240px}
+#log{height:200px;overflow-y:auto;padding:12px 14px;font-size:13px;background:var(--panel);border:1px solid var(--line);
+border-radius:0 0 16px 16px;color:#c7d2e0;white-space:pre-wrap}
+#log .danger{color:#ff8f90}#log .warn{color:#ffb066}#log .ok{color:#7fe3bd}
+@media (min-width:768px){.wrap{padding:24px}video{aspect-ratio:16/9}}
 </style>
 </head>
 <body>
 <div class="wrap">
   <header>
     <div class="brand">
-      <div class="logo" aria-hidden="true">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-          <circle cx="12" cy="12" r="4" fill="currentColor" stroke="none"/>
-          <path d="M12 2v2M12 20v2M2 12h2M20 12h2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M19.1 4.9l-1.4 1.4M6.3 17.7l-1.4 1.4"/>
-        </svg>
-      </div>
-      <div>
-        <h1>暖阳视界</h1>
-        <p>盲道路况 AI 播报</p>
-      </div>
+      <div class="logo"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="4" fill="currentColor" stroke="none"/><path d="M12 2v2M12 20v2M2 12h2M20 12h2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M19.1 4.9l-1.4 1.4M6.3 17.7l-1.4 1.4"/></svg></div>
+      <div><h1>暖阳视界</h1><p>盲道路况 AI 播报</p></div>
     </div>
-    <div class="status-dot" id="statusDot">
-      <span class="dot"></span>
-      <span id="statusText">待开启</span>
-    </div>
+    <div class="status-dot" id="statusDot"><span class="dot"></span><span id="statusText">待开启</span></div>
   </header>
-
   <div id="dangerBanner" role="alert" aria-live="assertive">
-    <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-      <path d="M12 3 2 20h20L12 3z"/>
-      <path d="M12 9v5" stroke-linecap="round"/>
-      <circle cx="12" cy="17" r=".6" fill="currentColor" stroke="none"/>
-    </svg>
+    <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 3 2 20h20L12 3z"/><path d="M12 9v5"/><circle cx="12" cy="17" r=".6" fill="currentColor"/></svg>
     <span id="dangerText">危险！</span>
   </div>
-
   <div id="camBox">
     <video id="video" autoplay playsinline muted></video>
     <canvas id="canvas"></canvas>
     <div id="camPlaceholder">
-      <div>
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6">
-          <rect x="2" y="6" width="13" height="12" rx="2"/>
-          <path d="m15 10 5-3v10l-5-3"/>
-        </svg>
-        <b>摄像头待开启</b>
-        <span>点击下方「开启播报」开始识别路况</span>
-      </div>
+      <div><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="2" y="6" width="13" height="12" rx="2"/><path d="m15 10 5-3v10l-5-3"/></svg>
+      <b>摄像头待开启</b><span>点击下方「开启播报」开始识别路况</span></div>
     </div>
   </div>
-
   <div id="nowCard">
-    <div id="nowIcon" aria-hidden="true">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-        <circle cx="12" cy="12" r="9"/>
-        <path d="M12 7v5l3 3"/>
-      </svg>
-    </div>
-    <div id="nowText">
-      <div class="t">等待开启</div>
-      <div class="s" id="nowSub">开启后实时播报前方路况</div>
-    </div>
+    <div id="nowIcon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 3"/></svg></div>
+    <div id="nowText"><div class="t">等待开启</div><div class="s" id="nowSub">开启后实时播报前方路况</div></div>
   </div>
-
   <div id="aiTip" aria-live="polite">
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-      <path d="M12 3v3M12 18v3M3 12h3M18 12h3M5.6 5.6l2.1 2.1M16.3 16.3l2.1 2.1M18.4 5.6l-2.1 2.1M7.7 16.3l-2.1 2.1"/>
-      <path d="M12 8a4 4 0 0 0-4 4h8a4 4 0 0 0-4-4z" fill="currentColor" stroke="none"/>
-    </svg>
-    <span id="aiTipText">AI 安全解说：开启后结合当前路况，为你生成一句行走建议。</span>
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 3v3M12 18v3M3 12h3M18 12h3M5.6 5.6l2.1 2.1M16.3 16.3l2.1 2.1M18.4 5.6l-2.1 2.1M7.7 16.3l-2.1 2.1"/><path d="M12 8a4 4 0 0 0-4 4h8a4 4 0 0 0-4-4z" fill="currentColor"/></svg>
+    <span id="aiTipText">AI安全解说：开启后结合路况给出行走建议。</span>
   </div>
-
   <div class="controls">
     <button id="btnStart" class="btn btn-primary">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-        <path d="M3 11V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2v6"/>
-        <path d="M3 13a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2v4a2 2 0 0 1-2 2h-1"/>
-        <path d="M4 17h2v2H4z" fill="currentColor"/>
-        <path d="M14 11v6M12 13l2 2 2-2"/>
-      </svg>
-      <span id="btnStartText">开启播报</span>
-      <span class="sub" id="btnStartSub">识别盲道与障碍</span>
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 11V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2v6"/><path d="M3 13a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2v4a2 2 0 0 1-2 2h-1"/><path d="M4 17h2v2H4z" fill="currentColor"/><path d="M14 11v6M12 13l2 2 2-2"/></svg>
+      <span id="btnStartText">开启播报</span><span class="sub" id="btnStartSub">识别盲道障碍</span>
     </button>
     <button id="btnNav" class="btn btn-nav">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-        <path d="M3 11 21 3l-8 18-2.5-7L3 11z"/>
-        <path d="M10.5 14 21 3"/>
-      </svg>
-      <span>一键导航</span>
-      <span class="sub">打开地图导航</span>
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 11 21 3l-8 18-2.5-7L3 11z"/><path d="M10.5 14 21 3"/></svg>
+      <span>一键导航</span><span class="sub">打开高德地图</span>
     </button>
   </div>
-
-  <div id="logHead" role="button" tabindex="0" aria-expanded="false">
-    <b>运行日志</b>
-    <svg class="chev" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-      <path d="m6 9 6 6 6-6"/>
-    </svg>
-  </div>
-  <div id="logBody">
-    <div id="log">— 暖阳视界 已就绪，点击「开启播报」开始 —</div>
-  </div>
-
+  <div id="logHead" role="button" tabindex="0" aria-expanded="false"><b>运行日志</b><svg class="chev" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m6 9 6 6 6-6"/></svg></div>
+  <div id="logBody"><div id="log">— 暖阳视界已就绪，点击开启播报 —</div></div>
   <div id="sosWrap">
-    <button id="sosBtn">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-        <path d="M22 16.9v3a2 2 0 0 1-2.2 2 19.8 19.8 0 0 1-8.6-3 19.5 19.5 0 0 1-6-6 19.8 19.8 0 0 1-3-8.7A2 2 0 0 1 4.1 2h3a2 2 0 0 1 2 1.7c.1 1 .4 2 .7 2.9a2 2 0 0 1-.5 2.1L8.1 9.9a16 16 0 0 0 6 6l1.2-1.2a2 2 0 0 1 2.1-.5c.9.3 1.9.6 2.9.7a2 2 0 0 1 1.7 2z"/>
-      </svg>
-      紧急呼叫亲人
-    </button>
-    <div id="sosHint">点击拨打 · 长按 2 秒修改联系人</div>
+    <button id="sosBtn"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 16.9v3a2 2 0 0 1-2.2 2 19.8 19.8 0 0 1-8.6-3 19.5 19.5 0 0 1-6-6 19.8 19.8 0 0 1-3-8.7A2 2 0 0 1 4.1 2h3a2 2 0 0 1 2 1.7c.1 1 .4 2 .7 2.9a2 2 0 0 1-.5 2.1L8.1 9.9a16 16 0 0 0 6 6l1.2-1.2a2 2 0 0 1 2.1-.5c.9.3 1.9.6 2.9.7a2 2 0 0 1 1.7 2z"/></svg>紧急呼叫亲人</button>
+    <div id="sosHint">点击拨打 · 长按2秒修改联系人</div>
   </div>
 </div>
 
 <script>
-/* ============================================================
- * 暖阳视界 · 盲道路况 AI 播报
- * 美化版：深色玻璃拟态 + 暖阳橙强调
- * ============================================================ */
 (function(){
-  "use strict";
+"use strict";
+const targetClasses=["person","bicycle","car","motorcycle","bus","truck","fire hydrant","traffic light","stop sign","bench","potted plant","dog","cat"];
+const CLASS_CN={person:"行人",bicycle:"自行车",car:"汽车",motorcycle:"摩托车",bus:"公交车",truck:"卡车","fire hydrant":"消防栓","traffic light":"红绿灯","stop sign":"停车标志",bench:"长椅","potted plant":"盆栽",dog:"狗",cat:"猫"};
+const KNOWN={person:1.7,bicycle:1.0,car:1.5,motorcycle:1.2,bus:3,truck:3,"fire hydrant":0.9,"traffic light":2.5,"stop sign":1,bench:0.8,"potted plant":0.6,dog:0.5,cat:0.3};
+const VFOV=35*Math.PI/180,DANGER=3,DANGER_BOX_RATIO=0.25,COOLDOWN=5000,AI_INTERVAL=15000,LOOP_DELAY=500;
 
-  /* ---------- 基础配置 ---------- */
-  var targetClasses = ["person","bicycle","car","motorcycle","bus","truck","fire hydrant","traffic light","stop sign","bench","potted plant","dog","cat"];
-  var CLASS_CN = {
-    "person":"行人","bicycle":"自行车","car":"汽车","motorcycle":"摩托车",
-    "bus":"公交车","truck":"卡车","fire hydrant":"消防栓",
-    "traffic light":"红绿灯","stop sign":"停车标志","bench":"长椅",
-    "potted plant":"盆栽","dog":"狗","cat":"猫"
-  };
-  var KNOWN = {
-    person:1.7,bicycle:1.0,car:1.5,motorcycle:1.2,bus:3,truck:3,
-    "fire hydrant":0.9,"traffic light":2.5,"stop sign":1,bench:0.8,
-    "potted plant":0.6,dog:0.5,cat:0.3
-  };
-  var VFOV = 35 * Math.PI / 180;
-  var DANGER = 3;
-  var DANGER_BOX_RATIO = 0.25;
-  var COOLDOWN = 5000;
-  var AI_INTERVAL = 15000;
-  var LOOP_DELAY = 500;
-
-  /* ---------- TTS语音配置：优先中文女声 ---------- */
-  let preferredVoice = null;
-
-  function loadVoices(){
-    const voices = speechSynthesis.getVoices();
-    preferredVoice = null;
-    const femaleZhKeywords = ["婷婷","Tingting","慧慧","晓晓","Xiaoxiao","Google 中文","zh-CN","zh-Hans"];
-    for(let v of voices){
-      const name = v.name.toLowerCase();
-      const lang = v.lang.toLowerCase();
-      const isZh = lang.startsWith("zh");
-      if(isZh){
-        if(femaleZhKeywords.some(k => name.includes(k.toLowerCase()))){
-          preferredVoice = v;
-          break;
-        }
-      }
-    }
-    if(!preferredVoice){
-      preferredVoice = voices.find(v => v.lang.toLowerCase().startsWith("zh")) || null;
+let preferredVoice=null;
+function loadVoices(){
+  const voices=speechSynthesis.getVoices();
+  preferredVoice=null;
+  const androidZh=["google","普通话","zh-cn","zh-Hans"];
+  for(let v of voices){
+    const n=v.name.toLowerCase(),l=v.lang.toLowerCase();
+    if(l.startsWith("zh")){
+      if(androidZh.some(k=>n.includes(k))) {preferredVoice=v;break;}
     }
   }
+  if(!preferredVoice) preferredVoice=voices.find(v=>v.lang.startsWith("zh"))||null;
+}
+speechSynthesis.addEventListener('voiceschanged',loadVoices);
+loadVoices();
 
-  speechSynthesis.addEventListener('voiceschanged', loadVoices);
-  loadVoices();
+const video=document.getElementById('video'),canvas=document.getElementById('canvas'),ctx=canvas.getContext('2d');
+const logDiv=document.getElementById('log'),statusText=document.getElementById('statusText'),statusDot=document.getElementById('statusDot');
+const aiTipText=document.getElementById('aiTipText'),btnStart=document.getElementById('btnStart'),btnStartText=document.getElementById('btnStartText'),btnStartSub=document.getElementById('btnStartSub');
+const btnNav=document.getElementById('btnNav'),sosBtn=document.getElementById('sosBtn'),camBox=document.getElementById('camBox');
+const nowIcon=document.getElementById('nowIcon'),nowTextT=document.querySelector('#nowText .t'),nowTextS=document.getElementById('nowSub');
+const dangerBanner=document.getElementById('dangerBanner'),dangerText=document.getElementById('dangerText'),logHead=document.getElementById('logHead'),logBody=document.getElementById('logBody');
 
-  /* ---------- DOM ---------- */
-  var video = document.getElementById('video');
-  var canvas = document.getElementById('canvas');
-  var ctx = canvas.getContext('2d');
-  var logDiv = document.getElementById('log');
-  var statusText = document.getElementById('statusText');
-  var statusDot = document.getElementById('statusDot');
-  var aiTipText = document.getElementById('aiTipText');
-  var btnStart = document.getElementById('btnStart');
-  var btnStartText = document.getElementById('btnStartText');
-  var btnStartSub = document.getElementById('btnStartSub');
-  var btnNav = document.getElementById('btnNav');
-  var sosBtn = document.getElementById('sosBtn');
-  var camBox = document.getElementById('camBox');
-  var nowIcon = document.getElementById('nowIcon');
-  var nowTextT = document.querySelector('#nowText .t');
-  var nowTextS = document.getElementById('nowSub');
-  var dangerBanner = document.getElementById('dangerBanner');
-  var dangerText = document.getElementById('dangerText');
-  var logHead = document.getElementById('logHead');
-  var logBody = document.getElementById('logBody');
+let model=null,track=new Map(),isVoice=false,running=false,lastObjects=[],lastAiTime=0;
 
-  /* ---------- 状态 ---------- */
-  var model = null;
-  var track = new Map();
-  var isVoice = false;
-  var running = false;
-  var lastObjects = [];
-  var lastAiTime = 0;
+function log(m,cls){
+  const d=new Date();
+  const t=('0'+d.getHours()).slice(-2)+':'+('0'+d.getMinutes()).slice(-2)+':'+('0'+d.getSeconds()).slice(-2);
+  const span=document.createElement('span');
+  span.className=cls||'info';
+  span.textContent=`[${t}] ${m}\n`;
+  logDiv.appendChild(span);
+  logDiv.scrollTop=logDiv.scrollHeight;
+}
+logHead.onclick=()=>{
+  const o=logBody.classList.toggle('open');
+  logHead.setAttribute('aria-expanded',o);
+  logHead.querySelector('.chev').style.transform=o?'rotate(180deg)':'';
+};
+logHead.onkeydown=e=>{if(e.key==='Enter'||e.key===' '){e.preventDefault();logHead.onclick()}};
 
-  /* ---------- 日志 ---------- */
-  function log(m,cls){
-    var d = new Date();
-    var t = ('0'+d.getHours()).slice(-2)+':'+('0'+d.getMinutes()).slice(-2)+':'+('0'+d.getSeconds()).slice(-2);
-    var span = document.createElement('span');
-    span.className = cls || 'info';
-    span.textContent = '['+t+'] '+m+'\n';
-    logDiv.appendChild(span);
-    logDiv.scrollTop = logDiv.scrollHeight;
+class VQ{
+  constructor(){this.q=[];this.p=false;}
+  speak(t,urgent){
+    if(urgent){this.q=[];speechSynthesis?.cancel();this.p=false;}
+    this.q.push(t);if(!this.p)this.go();
   }
-
-  logHead.addEventListener('click', toggleLog);
-  logHead.addEventListener('keydown', function(e){
-    if(e.key === 'Enter' || e.key === ' '){
-      e.preventDefault();
-      toggleLog();
-    }
-  });
-
-  function toggleLog(){
-    var open = logBody.classList.toggle('open');
-    logHead.setAttribute('aria-expanded', open ? 'true' : 'false');
-    var chev = logHead.querySelector('.chev');
-    chev.style.transform = open ? 'rotate(180deg)' : '';
-  }
-
-  /* ---------- 语音播报队列（危险可打断） ---------- */
-  function VQ(){
-    this.q = [];
-    this.p = false;
-  }
-
-  VQ.prototype.speak = function(t, urgent){
-    if(urgent){
-      this.q = [];
-      try{ speechSynthesis.cancel(); }catch(e){}
-      this.p = false;
-      this.q.push(t);
-      this.go();
-    }else{
-      this.q.push(t);
-      if(!this.p) this.go();
-    }
-  };
-
-  VQ.prototype.go = function(){
-    if(!this.q.length){
-      this.p = false;
-      return;
-    }
-    this.p = true;
-    var self = this;
-    var u = new SpeechSynthesisUtterance(this.q.shift());
-    u.lang = 'zh-CN';
-    u.rate = 1.15;
-    u.pitch = 1.0;
-
-    if(preferredVoice) u.voice = preferredVoice;
-
-    u.onend = function(){
-      setTimeout(function(){ self.go(); }, 180);
-    };
-
-    u.onerror = function(err){
-      log('语音播报异常:' + err.error, 'warn');
-      setTimeout(function(){ self.go(); }, 180);
-    };
-
+  go(){
+    if(!this.q.length){this.p=false;return;}
+    this.p=true;
+    const u=new SpeechSynthesisUtterance(this.q.shift());
+    u.lang="zh-CN";u.rate=1.12;u.pitch=1.0;
+    if(preferredVoice) u.voice=preferredVoice;
+    u.onend=()=>setTimeout(()=>this.go(),180);
+    u.onerror=e=>{log("语音异常:"+e.error,"warn");setTimeout(()=>this.go(),180)};
     speechSynthesis.speak(u);
-  };
-
-  var vq = new VQ();
-
-  function speak(t, urgent){
-    try{
-      vq.speak(t, urgent);
-    }catch(e){
-      log('语音异常' + e.message, 'warn');
-    }
   }
+}
+const vq=new VQ();
+const speak=(t,urgent)=>{try{vq.speak(t,urgent);}catch(e){log(e.message)}};
 
-  /* ---------- 检测辅助 ---------- */
-  function clockDir(nx){
-    var dx = (nx - 0.5) * 2;
-    var a = dx * 90;
-    var c = Math.round(a / 30);
-    if(c === 0) return 12;
-    if(c > 0) return c;
-    return 12 + c;
-  }
+function clockDir(nx){
+  const c=Math.round(((nx-0.5)*2*90)/30);
+  if(c===0)return 12;return c>0?c:12+c;
+}
+function getDist(cls,h,vh){
+  const known=KNOWN[cls]||1;if(h<=0)return 99;
+  const fp=(vh/2)/Math.tan(VFOV/2);
+  return (known*fp)/h;
+}
 
-  function getDist(cls, h, vh){
-    var known = KNOWN[cls] || 1;
-    if(h <= 0) return 99;
-    var fp = (vh / 2) / Math.tan(VFOV / 2);
-    return (known * fp) / h;
-  }
+function localSuggest(objs){
+  if(!objs.length)return"前方暂未检测障碍，可以放心行走。";
+  const danger=objs.filter(o=>o.danger);
+  if(danger.length){const d=danger[0];return`危险！前方${d.dist.toFixed(1)}米有${d.cn}，请停下绕行。`;}
+  const front=objs.filter(o=>o.isFront);
+  if(front.length){const f=front[0];return`正前方${f.dist.toFixed(1)}米有${f.cn}，放慢速度避让。`;}
+  const car=objs.filter(o=>["汽车","摩托车","公交车","卡车"].includes(o.cn));
+  if(car.length){const v=car[0];return`${v.dir}方向有${v.cn}，请靠路边行走。`;}
+  return"路况正常，注意脚下。";
+}
+async function runAi(){
+  const objs=lastObjects;
+  if(!objs.length){aiTipText.textContent="AI安全解说：画面无障碍物，可以前行。";return;}
+  const reply=localSuggest(objs);
+  aiTipText.textContent="AI建议："+reply;
+  speak(reply,false);log("AI建议："+reply);
+}
 
-  /* ---------- AI 安全解说 ---------- */
-  async function callLLM(userText, objects){
-    try{
-      var ctrl = ('AbortController' in window) ? new AbortController() : null;
-      var opt = {
-        method: 'POST',
-        headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({user: userText, objects: objects})
-      };
-      if(ctrl){
-        opt.signal = ctrl.signal;
-        setTimeout(function(){ ctrl.abort(); }, 4000);
-      }
-      var r = await fetch('/api/llm', opt);
-      if(!r.ok) throw new Error('HTTP ' + r.status);
-      var data = await r.json();
-      if(data && data.reply) return data.reply;
-      throw new Error('empty');
-    }catch(e){
-      return null;
+function setStatus(txt,cls){statusText.textContent=txt;statusDot.classList.toggle('on',cls==='on')}
+function setNow(state,title,sub){nowIcon.className=state;nowTextT.textContent=title;nowTextS.textContent=sub||''}
+const showDanger=t=>{dangerText.textContent=t;dangerBanner.classList.add('show')};
+const hideDanger=()=>dangerBanner.classList.remove('show');
+
+async function loop(){
+  if(!running)return;
+  if(!model||!video.srcObject||!video.videoWidth){setTimeout(loop,LOOP_DELAY);return;}
+  try{
+    const preds=await model.detect(video,30,0.4,0.5);
+    const vw=video.videoWidth,vh=video.videoHeight;
+    canvas.width=vw;canvas.height=vh;ctx.clearRect(0,0,vw,vh);
+    const now=Date.now();let objs=[];
+    for(let o of preds){
+      if(targetClasses.indexOf(o.class)<0)continue;
+      const [x,y,w,h]=o.bbox;
+      const nx=(x+w/2)/vw;
+      const dist=getDist(o.class,h,vh);
+      const danger=dist<DANGER||(h/vh)>DANGER_BOX_RATIO;
+      const dir=clockDir(nx),isFront=dir===12,cn=CLASS_CN[o.class];
+      ctx.strokeStyle=danger?"#ff4d4f":isFront?"#ff9f2e":"#ffd166";
+      ctx.lineWidth=3;ctx.strokeRect(x,y,w,h);
+      ctx.fillStyle=ctx.strokeStyle;ctx.font="15px sans-serif";
+      ctx.fillText(`${cn} ${dist.toFixed(1)}m`,x,y-6);
+      objs.push({cn,dist,dir,isFront,danger,nx,cls:o.class});
     }
-  }
-
-  function localSuggest(objs){
-    if(!objs.length) return '前方暂未检测到障碍，可以放心行走。';
-
-    var danger = objs.filter(function(o){ return o.danger; });
-    if(danger.length){
-      var d = danger[0];
-      return '危险！前方' + d.dist + '米有' + d.cn + '，请立即停下或靠边绕行。';
-    }
-
-    var front = objs.filter(function(o){ return o.isFront; });
-    if(front.length){
-      var f = front[0];
-      return '正前方' + f.dist + '米有' + f.cn + '，请放慢速度，注意避让。';
-    }
-
-    var vehicles = objs.filter(function(o){
-      return ['汽车','摩托车','公交车','卡车'].indexOf(o.cn) > -1;
+    objs.sort((a,b)=>{
+      if(a.danger!==b.danger) return a.danger?-1:1;
+      if(a.isFront!==b.isFront) return a.isFront?-1:1;
+      return a.dist-b.dist;
     });
-
-    if(vehicles.length){
-      var v = vehicles[0];
-      return v.dir + '方向有' + v.cn + '，请尽量靠路边行走。';
-    }
-
-    if(objs.length <= 2){
-      return '前方' + objs[0].dir + '有' + objs[0].cn + '，路况基本正常，注意脚下。';
-    }
-
-    return '前方行人或障碍较多，请放慢速度，听从提示音。';
-  }
-
-  async function runAi(){
-    var objs = lastObjects;
-    if(!objs.length){
-      aiTipText.textContent = 'AI 安全解说：当前画面未检测到障碍物，可以继续前行。';
-      return;
-    }
-
-    var reply = await callLLM('请用一句话、口语化、30字以内，结合当前路况给视障行人一个安全提醒。', objs);
-    if(!reply) reply = localSuggest(objs);
-
-    aiTipText.textContent = 'AI 建议：' + reply;
-    speak(reply, false);
-    log('AI 建议：' + reply);
-  }
-
-  /* ---------- 状态辅助 ---------- */
-  function setStatus(txt, cls){
-    statusText.textContent = txt;
-    statusDot.classList.toggle('on', cls === 'on');
-  }
-
-  function setNow(state, title, sub){
-    nowIcon.className = state;
-    nowTextT.textContent = title;
-    nowTextS.textContent = sub || '';
-  }
-
-  function showDanger(text){
-    dangerText.textContent = text;
-    dangerBanner.classList.add('show');
-  }
-
-  function hideDanger(){
-    dangerBanner.classList.remove('show');
-  }
-
-  /* ---------- 主检测循环 ---------- */
-  async function loop(){
-    if(!running) return;
-
-    if(!model || !video.srcObject || !video.videoWidth){
-      setTimeout(loop, LOOP_DELAY);
-      return;
-    }
-
-    try{
-      var preds = await model.detect(video, 30, 0.4, 0.5);
-      var vw = video.videoWidth;
-      var vh = video.videoHeight;
-
-      canvas.width = vw;
-      canvas.height = vh;
-      ctx.clearRect(0, 0, vw, vh);
-
-      var now = Date.now();
-      var objs = [];
-
-      for(var i = 0; i < preds.length; i++){
-        var o = preds[i];
-        if(targetClasses.indexOf(o.class) < 0) continue;
-
-        var b = o.bbox;
-        var x = b[0], y = b[1], w = b[2], h = b[3];
-        var nx = (x + w / 2) / vw;
-        var dist = getDist(o.class, h, vh);
-        var boxRatio = h / vh;
-        var danger = dist < DANGER || boxRatio > DANGER_BOX_RATIO;
-        var dir = clockDir(nx);
-        var isFront = (dir === 12);
-        var cn = CLASS_CN[o.class] || o.class;
-
-        ctx.strokeStyle = danger ? '#ff4d4f' : (isFront ? '#ff9f2e' : '#ffd166');
-        ctx.lineWidth = 3;
-        ctx.strokeRect(x, y, w, h);
-
-        ctx.font = '15px system-ui,sans-serif';
-        ctx.fillStyle = danger ? '#ff4d4f' : (isFront ? '#ff9f2e' : '#ffd166');
-        ctx.fillText(cn + ' ' + dist.toFixed(1) + 'm', x, y - 6);
-
-        objs.push({
-          cls: o.class,
-          cn: cn,
-          dist: dist,
-          dir: dir,
-          isFront: isFront,
-          danger: danger,
-          nx: nx
-        });
+    const top=objs[0];
+    if(top){
+      const clockName=top.dir===12?"正前方":top.dir+"点钟方向";
+      const id=top.cls+"_"+Math.round(top.nx*10);
+      if(now-(track.get(id)||0)>=COOLDOWN){
+        track.set(id,now);
+        const prefix=top.danger?"危险！":(top.isFront?"前方有障碍，请注意：":"");
+        const txt=`${prefix}${clockName}，${top.dist.toFixed(1)}米，${top.cn}`;
+        speak(txt,!!top.danger);log(txt,top.danger?"danger":top.isFront?"warn":"info");
       }
-
-      objs.sort(function(a, b){
-        if(a.danger !== b.danger) return a.danger ? -1 : 1;
-        if(a.isFront !== b.isFront) return a.isFront ? -1 : 1;
-        return a.dist - b.dist;
-      });
-
-      var top = objs[0];
-
-      if(top){
-        var clockName = top.dir === 12 ? '正前方' : top.dir + '点钟方向';
-        var id = top.cls + '_' + Math.round(top.nx * 10);
-
-        if(now - (track.get(id) || 0) >= COOLDOWN){
-          track.set(id, now);
-
-          var prefix = '';
-          if(top.danger) prefix = '危险！';
-          else if(top.isFront) prefix = '前方有障碍，请注意：';
-
-          var txt = prefix + clockName + '，' + top.dist.toFixed(1) + '米，' + top.cn;
-          speak(txt, !!top.danger);
-          log(txt, top.danger ? 'danger' : (top.isFront ? 'warn' : 'info'));
-        }
-      }
-
-      if(top){
-        var cardTitle = clockName + ' ' + top.dist.toFixed(1) + '米 · ' + top.cn;
-
-        if(top.danger){
-          setNow('danger', cardTitle, '危险！请停下或绕行');
-          showDanger('危险！' + cardTitle);
-        }else if(top.isFront){
-          setNow('warn', cardTitle, '注意前方障碍，放慢速度');
-          hideDanger();
-        }else{
-          setNow('info', cardTitle, clockName + '方向 ' + top.dist.toFixed(1) + '米');
-          hideDanger();
-        }
-      }else{
-        setNow('ok', '前方畅通', '未检测到明显障碍，请继续行走');
-        hideDanger();
-      }
-
-      lastObjects = objs.map(function(o){
-        return {
-          cls: o.cn,
-          dist: o.dist.toFixed(1),
-          dir: o.dir === 12 ? '正前方' : o.dir + '点钟方向',
-          danger: o.danger
-        };
-      });
-
-      for(var it = track.entries();;){
-        var e = it.next();
-        if(e.done) break;
-        if(now - e.value[1] > COOLDOWN * 3) track.delete(e.value[0]);
-      }
-
-      if(now - lastAiTime >= AI_INTERVAL){
-        lastAiTime = now;
-        if(lastObjects.length) runAi();
-      }
-    }catch(err){
-      log('识别出错：' + err.message, 'warn');
     }
+    if(top){
+      const title=(top.dir===12?"正前方":top.dir+"点钟方向")+" "+top.dist.toFixed(1)+"米 · "+top.cn;
+      if(top.danger){setNow("danger",title,"危险！停下绕行");showDanger("危险！"+title);}
+      else if(top.isFront){setNow("warn",title,"注意障碍，放慢速度");hideDanger();}
+      else {setNow("info",title,"");hideDanger();}
+    }else{setNow("ok","前方畅通","无明显障碍，请继续行走");hideDanger();}
+    lastObjects=objs.map(o=>({cn:o.cn,dist:o.dist.toFixed(1),dir:o.dir===12?"正前方":o.dir+"点钟方向",danger:o.danger}));
+    for(const [k,t] of track.entries()){if(now-t>COOLDOWN*3)track.delete(k);}
+    if(now-lastAiTime>=AI_INTERVAL){lastAiTime=now;if(lastObjects.length) runAi();}
+  }catch(err){log("识别出错:"+err.message,"warn")}
+  setTimeout(loop,LOOP_DELAY);
+}
 
-    setTimeout(loop, LOOP_DELAY);
+btnStart.onclick=async function(){
+  if(!isVoice){speak("语音已开启，暖阳视界开始播报",true);isVoice=true;}
+  if(running){
+    running=false;isVoice=false;
+    btnStartText.textContent="开启播报";btnStartSub.textContent="识别盲道障碍";
+    btnStart.classList.remove('running');setStatus("已停止");
+    setNow("info","已停止","点击重新开启");hideDanger();
+    return;
   }
-
-  /* ---------- 开启播报 ---------- */
-  btnStart.addEventListener('click', onStart);
-
-  function onStart(){
-    if(!isVoice){
-      speak('语音已开启，暖阳视界开始播报', true);
-      isVoice = true;
+  setStatus("请求摄像头…");setNow("info","正在开启…","");
+  try{
+    if(!video.srcObject){
+      const stream=await navigator.mediaDevices.getUserMedia({video:{facingMode:"environment"}});
+      video.srcObject=stream;camBox.classList.add('live');
     }
+    setStatus("加载AI模型…");log("正在加载模型…");
+    if(!model) model=await cocoSsd.load();
+    running=true;isVoice=true;
+    btnStartText.textContent="停止播报";btnStartSub.textContent="点按停止";
+    btnStart.classList.add('running');setStatus("识别中","on");
+    setNow("ok","已就绪","开始识别路况");log("模型加载完成，开始播报","ok");
+    loop();
+  }catch(e){setStatus("出错："+e.message);log(e.message,"danger");setNow("danger","启动失败","检查摄像头权限")}
+};
 
-    if(running){
-      running = false;
-      isVoice = false;
+let sosPhone=localStorage.getItem("sosPhone")||"";
+const askPhone=()=>{
+  const p=prompt("紧急联系人手机号：",sosPhone||"");
+  if(p){sosPhone=p.trim();localStorage.setItem("sosPhone",sosPhone);speak("联系人已设置",true);log("联系人已设置","ok");}
+};
+sosBtn.onclick=()=>{if(!sosPhone){askPhone();if(!sosPhone)return;}speak("正在拨打亲人",true);log("拨打 "+sosPhone,"danger");window.location.href="tel:"+sosPhone};
+let sosTimer=null;
+sosBtn.ontouchstart=()=>sosTimer=setTimeout(askPhone,2000);
+sosBtn.ontouchend=sosBtn.ontouchmove=()=>{if(sosTimer)clearTimeout(sosTimer)};
 
-      btnStartText.textContent = '开启播报';
-      btnStartSub.textContent = '识别盲道与障碍';
-      btnStart.classList.remove('running');
-
-      setStatus('已停止');
-      setNow('info', '已停止', '点击上方按钮重新开启');
-      hideDanger();
-      return;
-    }
-
-    doStart();
-  }
-
-  async function doStart(){
-    setStatus('请求摄像头…');
-    setNow('info', '正在开启…', '');
-
-    try{
-      if(!video.srcObject){
-        var stream = await navigator.mediaDevices.getUserMedia({
-          video: {facingMode: 'environment'}
-        });
-        video.srcObject = stream;
-        camBox.classList.add('live');
-      }
-
-      setStatus('加载 AI 模型…');
-      log('正在加载 AI 模型，首次约需数秒…');
-
-      if(!model) model = await cocoSsd.load();
-
-      running = true;
-      isVoice = true;
-
-      btnStartText.textContent = '停止播报';
-      btnStartSub.textContent = '点按可随时停止';
-      btnStart.classList.add('running');
-
-      setStatus('识别中', 'on');
-      setNow('ok', '已就绪', '开始识别盲道与障碍');
-
-      log('模型加载完成，开始播报', 'ok');
-      loop();
-    }catch(e){
-      setStatus('出错：' + e.message);
-      log('错误：' + e.message, 'danger');
-      setNow('danger', '启动失败', '请检查摄像头权限后重试');
-    }
-  }
-
-  /* ---------- 紧急呼叫 ---------- */
-  var sosPhone = localStorage.getItem('sosPhone') || '';
-
-  function askPhone(){
-    var p = prompt('紧急联系人电话（亲人/朋友）:', sosPhone || '');
-    if(p){
-      sosPhone = p.trim();
-      localStorage.setItem('sosPhone', sosPhone);
-      speak('紧急联系人已设置', true);
-      log('紧急联系人已设置', 'ok');
-    }
-  }
-
-  sosBtn.addEventListener('click', function(){
-    if(!sosPhone){
-      askPhone();
-      if(!sosPhone) return;
-    }
-    speak('正在拨打紧急联系人', true);
-    log('拨打紧急联系人 ' + sosPhone, 'danger');
-    window.location.href = 'tel:' + sosPhone;
-  });
-
-  var sosTimer = null;
-
-  sosBtn.addEventListener('touchstart', function(){
-    sosTimer = setTimeout(function(){ askPhone(); }, 2000);
-  });
-
-  sosBtn.addEventListener('touchend', function(){
-    if(sosTimer) clearTimeout(sosTimer);
-  });
-
-  sosBtn.addEventListener('touchmove', function(){
-    if(sosTimer) clearTimeout(sosTimer);
-  });
-
-  /* ---------- 一键导航 ---------- */
-  btnNav.addEventListener('click', function(){
-    speak('正在打开地图导航', true);
-    log('打开地图导航', 'info');
-    window.open('https://uri.amap.com/marker?name=当前位置&src=nuanyangshijie', '_blank');
-  });
+btnNav.onclick=()=>{speak("打开地图导航",true);window.open("https://uri.amap.com/marker?name=当前位置&src=nuanyangshijie","_blank")};
 
 })();
 </script>
