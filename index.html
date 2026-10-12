@@ -18,7 +18,7 @@
   --warn:#ffb066;--warn-bg:rgba(255,176,102,0.14);
   --danger:#ff5a5c;--danger-bg:rgba(255,90,92,0.16);
   --radius:22px;--radius-sm:14px;
-  --shadow:0 20px 40px rgba(0,0,0,0.35);--shadow-soft:0 10px 24px rgba(0,0,0,0.25);
+  --shadow:0 20px 40px rgba(0,0,0,0.35);--shadow-soft:0 10px 24px rgba(0,0,0.25);
 }
 *{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent}
 html,body{height:100%}
@@ -128,7 +128,7 @@ border-radius:0 0 16px 16px;color:#c7d2e0;white-space:pre-wrap}
   </div>
   <div id="aiTip" aria-live="polite">
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 3v3M12 18v3M3 12h3M18 12h3M5.6 5.6l2.1 2.1M16.3 16.3l2.1 2.1M18.4 5.6l-2.1 2.1M7.7 16.3l-2.1 2.1"/><path d="M12 8a4 4 0 0 0-4 4h8a4 4 0 0 0-4-4z" fill="currentColor"/></svg>
-    <span id="aiTipText">AI安全解说：正前方静止行人播报，走动行人不播报。</span>
+    <span id="aiTipText">AI安全解说：正前方背包、墙体、静止行人播报，走动行人不播报。</span>
   </div>
   <div class="controls">
     <button id="btnStart" class="btn btn-primary">
@@ -151,11 +151,21 @@ border-radius:0 0 16px 16px;color:#c7d2e0;white-space:pre-wrap}
 <script>
 (function(){
 "use strict";
-const targetClasses=["person","bicycle","car","motorcycle","bus","truck","fire hydrant","traffic light","stop sign","bench","potted plant","dog","cat"];
-const CLASS_CN={person:"行人",bicycle:"自行车",car:"汽车",motorcycle:"摩托车",bus:"公交车",truck:"卡车","fire hydrant":"消防栓","traffic light":"红绿灯","stop sign":"停车标志",bench:"长椅","potted plant":"盆栽",dog:"狗",cat:"猫"};
-const KNOWN={person:1.7,bicycle:1.0,car:1.5,motorcycle:1.2,bus:3,truck:3,"fire hydrant":0.9,"traffic light":2.5,"stop sign":1,bench:0.8,"potted plant":0.6,dog:0.5,cat:0.3};
+//新增backpack背包
+const targetClasses=["person","bicycle","car","motorcycle","bus","truck","fire hydrant","traffic light","stop sign","bench","potted plant","dog","cat","backpack"];
+const CLASS_CN={
+  person:"行人",bicycle:"自行车",car:"汽车",motorcycle:"摩托车",bus:"公交车",truck:"卡车",
+  "fire hydrant":"消防栓","traffic light":"红绿灯","stop sign":"停车标志",bench:"长椅",
+  "potted plant":"盆栽",dog:"狗",cat:"猫",backpack:"背包"
+};
+const KNOWN={
+  person:1.7,bicycle:1.0,car:1.5,motorcycle:1.2,bus:3,truck:3,"fire hydrant":0.9,
+  "traffic light":2.5,"stop sign":1,bench:0.8,"potted plant":0.6,dog:0.5,cat:0.3,backpack:0.4
+};
 const VFOV=35*Math.PI/180,DANGER=3,DANGER_BOX_RATIO=0.25,COOLDOWN=5000,AI_INTERVAL=15000,LOOP_DELAY=800;
 const MOVE_THRESHOLD=22; //像素，小于该值判定行人静止
+const WALL_COOLDOWN=6000;
+let lastWallAlert=0;
 
 let supportTTS=!!window.speechSynthesis;
 let preferredVoice=null;
@@ -239,6 +249,27 @@ function getPixelDist(x1,y1,x2,y2){
   return Math.hypot(x1-x2,y1-y2);
 }
 
+//简易墙面检测：画面下半部分像素色差小，判定近处墙体
+function detectWall(vw,vh){
+  const sampleH=Math.floor(vh*0.45);
+  const imgData=ctx.getImageData(0,vh-sampleH,vw,sampleH);
+  const data=imgData.data;
+  let sumR=0,sumG=0,sumB=0;
+  let variance=0;
+  const step=12;
+  const count=Math.floor(data.length/4/step);
+  for(let i=0;i<data.length;i+=4*step){
+    sumR+=data[i];sumG+=data[i+1];sumB+=data[i+2];
+  }
+  const avgR=sumR/count,avgG=sumG/count,avgB=sumB/count;
+  for(let i=0;i<data.length;i+=4*step){
+    variance += Math.pow(data[i]-avgR,2)+Math.pow(data[i+1]-avgG,2)+Math.pow(data[i+2]-avgB,2);
+  }
+  variance /= count;
+  //方差小=颜色统一，墙面
+  return variance < 1200;
+}
+
 function localSuggest(objs){
   if(!objs.length)return"前方暂未检测障碍，可以放心行走。";
   const danger=objs.filter(o=>o.danger);
@@ -311,13 +342,14 @@ async function loop(){
       return a.dist-b.dist;
     });
     const top=objs[0];
+    let wallDetected = detectWall(vw,vh);
 
-    //播报规则：只播报12点方向
+    //物体播报逻辑
     if(top && top.isFront){
       const clockName="正前方";
       const id=top.cls+"_"+Math.round(top.nx*10);
       if(now-(track.get(id)||0)>=COOLDOWN){
-        //过滤条件：走动的行人不播报；静止行人播报；其他障碍物全部播报
+        //过滤条件：走动的行人不播报；静止行人、背包、其他障碍物全部播报
         const skipSpeak = (top.cls==="person" && top.isMovingPerson);
         if(!skipSpeak){
           track.set(id,now);
@@ -330,14 +362,22 @@ async function loop(){
       }
     }
 
-    if(top && top.isFront){
+    //墙体预警逻辑
+    if(wallDetected && now - lastWallAlert > WALL_COOLDOWN){
+      lastWallAlert = now;
+      const wallTxt="危险！正前方墙体，小心碰撞，请停下";
+      speak(wallTxt,true);
+      log(wallTxt,"danger");
+      showDanger(wallTxt);
+      setNow("danger","正前方墙体","小心碰撞");
+    }else if(!wallDetected && (!top || !top.isFront)){
+      setNow("ok","前方畅通","无正前方障碍物，请继续行走");
+      hideDanger();
+    }else if(top && top.isFront){
       let title="正前方 "+top.dist.toFixed(1)+"米 · "+top.cn;
       if(top.cls==="person") title += top.isMovingPerson?" (走动)":" (静止)";
       if(top.danger){setNow("danger",title,"危险！停下绕行");showDanger("危险！"+title);}
       else {setNow("warn",title,"注意障碍，放慢速度");hideDanger();}
-    }else{
-      setNow("ok","前方畅通","无正前方障碍物，请继续行走");
-      hideDanger();
     }
 
     lastObjects=objs.map(o=>({cn:o.cn,dist:o.dist.toFixed(1),dir:o.dir===12?"正前方":o.dir+"点钟方向",danger:o.danger}));
