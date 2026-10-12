@@ -128,7 +128,7 @@ border-radius:0 0 16px 16px;color:#c7d2e0;white-space:pre-wrap}
   </div>
   <div id="aiTip" aria-live="polite">
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 3v3M12 18v3M3 12h3M18 12h3M5.6 5.6l2.1 2.1M16.3 16.3l2.1 2.1M18.4 5.6l-2.1 2.1M7.7 16.3l-2.1 2.1"/><path d="M12 8a4 4 0 0 0-4 4h8a4 4 0 0 0-4-4z" fill="currentColor"/></svg>
-    <span id="aiTipText">AI安全解说：开启后结合路况给出行走建议。</span>
+    <span id="aiTipText">AI安全解说：正前方静止行人播报，走动行人不播报。</span>
   </div>
   <div class="controls">
     <button id="btnStart" class="btn btn-primary">
@@ -155,6 +155,7 @@ const targetClasses=["person","bicycle","car","motorcycle","bus","truck","fire h
 const CLASS_CN={person:"行人",bicycle:"自行车",car:"汽车",motorcycle:"摩托车",bus:"公交车",truck:"卡车","fire hydrant":"消防栓","traffic light":"红绿灯","stop sign":"停车标志",bench:"长椅","potted plant":"盆栽",dog:"狗",cat:"猫"};
 const KNOWN={person:1.7,bicycle:1.0,car:1.5,motorcycle:1.2,bus:3,truck:3,"fire hydrant":0.9,"traffic light":2.5,"stop sign":1,bench:0.8,"potted plant":0.6,dog:0.5,cat:0.3};
 const VFOV=35*Math.PI/180,DANGER=3,DANGER_BOX_RATIO=0.25,COOLDOWN=5000,AI_INTERVAL=15000,LOOP_DELAY=800;
+const MOVE_THRESHOLD=22; //像素，小于该值判定行人静止
 
 let supportTTS=!!window.speechSynthesis;
 let preferredVoice=null;
@@ -184,6 +185,7 @@ const nowIcon=document.getElementById('nowIcon'),nowTextT=document.querySelector
 const dangerBanner=document.getElementById('dangerBanner'),dangerText=document.getElementById('dangerText'),logHead=document.getElementById('logHead'),logBody=document.getElementById('logBody');
 
 let model=null,track=new Map(),isVoice=false,running=false,lastObjects=[],lastAiTime=0;
+let prevObjMap=new Map(); //保存上一帧物体中心点 {key:{cx,cy}}
 
 function log(m,cls){
   const d=new Date();
@@ -232,6 +234,11 @@ function getDist(cls,h,vh){
   return (known*fp)/h;
 }
 
+//计算两点距离
+function getPixelDist(x1,y1,x2,y2){
+  return Math.hypot(x1-x2,y1-y2);
+}
+
 function localSuggest(objs){
   if(!objs.length)return"前方暂未检测障碍，可以放心行走。";
   const danger=objs.filter(o=>o.danger);
@@ -263,41 +270,76 @@ async function loop(){
     const vw=video.videoWidth,vh=video.videoHeight;
     canvas.width=vw;canvas.height=vh;ctx.clearRect(0,0,vw,vh);
     const now=Date.now();let objs=[];
+    const currObjMap=new Map();
+
     for(let o of preds){
       if(targetClasses.indexOf(o.class)<0)continue;
       const [x,y,w,h]=o.bbox;
-      const nx=(x+w/2)/vw;
+      const cx=x+w/2, cy=y+h/2;
+      const nx=cx/vw;
       const dist=getDist(o.class,h,vh);
       const danger=dist<DANGER||(h/vh)>DANGER_BOX_RATIO;
       const dir=clockDir(nx),isFront=dir===12,cn=CLASS_CN[o.class];
+      //生成简易id
+      const objKey=o.class+"_"+Math.round(cx/15)+"_"+Math.round(cy/15);
+      currObjMap.set(objKey,{cx,cy});
+
+      //判断行人是否静止
+      let isMovingPerson=false;
+      if(o.class==="person"){
+        const prev=currObjMap.has(objKey)?prevObjMap.get(objKey):null;
+        if(prev){
+          const d=getPixelDist(cx,cy,prev.cx,prev.cy);
+          isMovingPerson = d>MOVE_THRESHOLD;
+        }
+      }
+
       ctx.strokeStyle=danger?"#ff4d4f":isFront?"#ff9f2e":"#ffd166";
       ctx.lineWidth=3;ctx.strokeRect(x,y,w,h);
       ctx.fillStyle=ctx.strokeStyle;ctx.font="15px sans-serif";
-      ctx.fillText(`${cn} ${dist.toFixed(1)}m`,x,y-6);
-      objs.push({cn,dist,dir,isFront,danger,nx,cls:o.class});
+      let labelText=cn+" "+dist.toFixed(1)+"m";
+      if(o.class==="person") labelText += isMovingPerson?" (走动)":" (静止)";
+      ctx.fillText(labelText,x,y-6);
+
+      objs.push({cn,dist,dir,isFront,danger,nx,cls:o.class,objKey,isMovingPerson});
     }
+    prevObjMap=currObjMap;
+
     objs.sort((a,b)=>{
       if(a.danger!==b.danger) return a.danger?-1:1;
       if(a.isFront!==b.isFront) return a.isFront?-1:1;
       return a.dist-b.dist;
     });
     const top=objs[0];
-    if(top){
-      const clockName=top.dir===12?"正前方":top.dir+"点钟方向";
+
+    //播报规则：只播报12点方向
+    if(top && top.isFront){
+      const clockName="正前方";
       const id=top.cls+"_"+Math.round(top.nx*10);
       if(now-(track.get(id)||0)>=COOLDOWN){
-        track.set(id,now);
-        const prefix=top.danger?"危险！":(top.isFront?"前方有障碍，请注意：":"");
-        const txt=`${prefix}${clockName}，${top.dist.toFixed(1)}米，${top.cn}`;
-        speak(txt,!!top.danger);log(txt,top.danger?"danger":top.isFront?"warn":"info");
+        //过滤条件：走动的行人不播报；静止行人播报；其他障碍物全部播报
+        const skipSpeak = (top.cls==="person" && top.isMovingPerson);
+        if(!skipSpeak){
+          track.set(id,now);
+          const prefix=top.danger?"危险！":"注意：";
+          let txt=`${prefix}${clockName}，${top.dist.toFixed(1)}米，${top.cn}`;
+          if(top.cls==="person" && !top.isMovingPerson) txt+="，静止行人，请绕行";
+          speak(txt,!!top.danger);
+          log(txt,top.danger?"danger":"warn");
+        }
       }
     }
-    if(top){
-      const title=(top.dir===12?"正前方":top.dir+"点钟方向")+" "+top.dist.toFixed(1)+"米 · "+top.cn;
+
+    if(top && top.isFront){
+      let title="正前方 "+top.dist.toFixed(1)+"米 · "+top.cn;
+      if(top.cls==="person") title += top.isMovingPerson?" (走动)":" (静止)";
       if(top.danger){setNow("danger",title,"危险！停下绕行");showDanger("危险！"+title);}
-      else if(top.isFront){setNow("warn",title,"注意障碍，放慢速度");hideDanger();}
-      else {setNow("info",title,"");hideDanger();}
-    }else{setNow("ok","前方畅通","无明显障碍，请继续行走");hideDanger();}
+      else {setNow("warn",title,"注意障碍，放慢速度");hideDanger();}
+    }else{
+      setNow("ok","前方畅通","无正前方障碍物，请继续行走");
+      hideDanger();
+    }
+
     lastObjects=objs.map(o=>({cn:o.cn,dist:o.dist.toFixed(1),dir:o.dir===12?"正前方":o.dir+"点钟方向",danger:o.danger}));
     for(const [k,t] of track.entries()){if(now-t>COOLDOWN*3)track.delete(k);}
     if(now-lastAiTime>=AI_INTERVAL){lastAiTime=now;if(lastObjects.length) runAi();}
@@ -318,6 +360,7 @@ btnStart.onclick=async function(){
       btnStartText.textContent="开启播报";btnStartSub.textContent="识别盲道障碍";
       btnStart.classList.remove('running');setStatus("已停止");
       setNow("info","已停止","点击重新开启");hideDanger();
+      prevObjMap.clear();
       return;
     }
     btnStart.disabled=true;
@@ -332,6 +375,7 @@ btnStart.onclick=async function(){
     btnStartText.textContent="停止播报";btnStartSub.textContent="点按停止";
     btnStart.classList.add('running');setStatus("识别中","on");
     setNow("ok","已就绪","开始识别路况");log("模型加载完成，开始播报","ok");
+    prevObjMap.clear();
     loop();
   }catch(e){
     log("启动异常："+e.message,"danger");
