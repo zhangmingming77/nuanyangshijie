@@ -18,7 +18,7 @@
   --warn:#ffb066;--warn-bg:rgba(255,176,102,0.14);
   --danger:#ff5a5c;--danger-bg:rgba(255,90,92,0.16);
   --radius:22px;--radius-sm:14px;
-  --shadow:0 20px 40px rgba(0,0,0,0.35);--shadow-soft:0 10px 24px rgba(0,0,0.25);
+  --shadow:0 20px 40px rgba(0,0,0,0.35);--shadow-soft:0 10px 24px rgba(0,0,0,0.25);
 }
 *{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent}
 html,body{height:100%}
@@ -69,10 +69,9 @@ border-radius:var(--radius);padding:16px;min-height:74px;backdrop-filter:blur(14
 #nowText{flex:1;min-width:0}
 #nowText .t{font-size:18px;font-weight:800;line-height:1.3}
 #nowText .s{font-size:13px;color:var(--txt-2);margin-top:4px}
-#aiTip{display:flex;gap:12px;align-items:flex-start;background:linear-gradient(135deg,rgba(255,159,46,0.14),rgba(255,159,46,0.04));
+#aiTip{display:flex;gap:12px;align-items:center;background:linear-gradient(135deg,rgba(255,159,46,0.14),rgba(255,159,46,0.04));
 border:1px solid rgba(255,159,46,0.28);color:var(--sun-soft);padding:14px 16px;border-radius:var(--radius);
 font-size:14px;line-height:1.6;box-shadow:var(--shadow-soft)}
-#aiTip svg{width:20px;height:20px;color:var(--sun);margin-top:2px}
 .controls{display:grid;grid-template-columns:1fr 1fr;gap:12px}
 .btn{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:7px;min-height:82px;padding:14px;
 border:none;border-radius:18px;cursor:pointer;color:#fff;font-weight:800;font-size:16px;transition:transform .08s,filter .15s}
@@ -127,8 +126,7 @@ border-radius:0 0 16px 16px;color:#c7d2e0;white-space:pre-wrap}
     <div id="nowText"><div class="t">等待开启</div><div class="s" id="nowSub">开启后实时播报前方路况</div></div>
   </div>
   <div id="aiTip" aria-live="polite">
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 3v3M12 18v3M3 12h3M18 12h3M5.6 5.6l2.1 2.1M16.3 16.3l2.1 2.1M18.4 5.6l-2.1 2.1M7.7 16.3l-2.1 2.1"/><path d="M12 8a4 4 0 0 0-4 4h8a4 4 0 0 0-4-4z" fill="currentColor"/></svg>
-    <span id="aiTipText">AI安全解说：正前方背包、墙体、静止行人播报，走动行人不播报。</span>
+    <span id="aiTipText">AI安全解说：正前方10点到2点方向障碍物自动播报，走动行人不播报。</span>
   </div>
   <div class="controls">
     <button id="btnStart" class="btn btn-primary">
@@ -159,15 +157,16 @@ const CLASS_CN={
   "potted plant":"盆栽",dog:"狗",cat:"猫",backpack:"背包"
 };
 const KNOWN={
-  person:1.7,bicycle:1.0,car:1.5,motorcycle:1.2,bus:3,truck:3,"fire hydrant":0.9,
-  "traffic light":2.5,"stop sign":1,bench:0.8,"potted plant":0.6,dog:0.5,cat:0.3,backpack:0.4
+  person:1.65,bicycle:1.1,car:1.6,motorcycle:1.3,bus:3.2,truck:3.2,"fire hydrant":0.75,
+  "traffic light":2.8,"stop sign":0.75,bench:0.9,"potted plant":0.8,dog:0.6,cat:0.35,backpack:0.5
 };
-const VFOV=35*Math.PI/180,DANGER=3,DANGER_BOX_RATIO=0.25,COOLDOWN=5000,AI_INTERVAL=15000,LOOP_DELAY=800;
-const MOVE_THRESHOLD=22; //像素，小于该值判定行人静止
+const VFOV=52*Math.PI/180,DANGER=3,DANGER_BOX_RATIO=0.28,COOLDOWN=4000,AI_INTERVAL=15000,LOOP_DELAY=800;
+const FRONT_START=10,FRONT_END=2; // 10点~2点方向都算前方播报
 const WALL_COOLDOWN=6000;
 let lastWallAlert=0;
 
 let supportTTS=!!window.speechSynthesis;
+let ttsWarmedUp=false;
 let preferredVoice=null;
 function loadVoices(){
   if(!supportTTS) return;
@@ -195,6 +194,7 @@ const nowIcon=document.getElementById('nowIcon'),nowTextT=document.querySelector
 const dangerBanner=document.getElementById('dangerBanner'),dangerText=document.getElementById('dangerText'),logHead=document.getElementById('logHead'),logBody=document.getElementById('logBody');
 
 let model=null,track=new Map(),isVoice=false,running=false,lastObjects=[],lastAiTime=0;
+let wallCanvas=null,wallCtx=null;
 let prevObjMap=new Map(); //保存上一帧物体中心点 {key:{cx,cy}}
 
 function log(m,cls){
@@ -217,7 +217,15 @@ class VQ{
   constructor(){this.q=[];this.p=false;}
   speak(t,urgent){
     if(!supportTTS){ log("设备不支持语音播报","warn"); return; }
-    if(urgent){this.q=[];speechSynthesis?.cancel();this.p=false;}
+    // iOS/华为 预热：首次播报前先播一个极短静音内容激活语音引擎
+    if(!ttsWarmedUp){
+      ttsWarmedUp=true;
+      try{
+        const warm=new SpeechSynthesisUtterance(" ");
+        warm.volume=0;warm.rate=2;speechSynthesis.speak(warm);
+      }catch(e){}
+    }
+    if(urgent){this.q=[];try{speechSynthesis.cancel();}catch(e){}this.p=false;}
     this.q.push(t);if(!this.p)this.go();
   }
   go(){
@@ -226,8 +234,13 @@ class VQ{
     const u=new SpeechSynthesisUtterance(this.q.shift());
     u.lang="zh-CN";u.rate=1.12;u.pitch=1.0;
     if(preferredVoice) u.voice=preferredVoice;
-    u.onend=()=>setTimeout(()=>this.go(),180);
-    u.onerror=e=>{log("语音异常:"+e.error,"warn");setTimeout(()=>this.go(),180)};
+    let done=false;
+    const next=()=>{if(done)return;done=true;setTimeout(()=>this.go(),180);};
+    u.onend=()=>next();
+    u.onerror=e=>{log("语音异常:"+e.error,"warn");next();};
+    // 华为/iOS 部分机型 onend 可能不触发，加超时兜底
+    const est=Math.max(2000, u.text.length*200);
+    setTimeout(next, est);
     speechSynthesis.speak(u);
   }
 }
@@ -238,10 +251,12 @@ function clockDir(nx){
   const c=Math.round(((nx-0.5)*2*90)/30);
   if(c===0)return 12;return c>0?c:12+c;
 }
-function getDist(cls,h,vh){
-  const known=KNOWN[cls]||1;if(h<=0)return 99;
+function getDist(cls,h,vh,cy){
+  const known=KNOWN[cls]||0.8;if(h<=0)return 99;
   const fp=(vh/2)/Math.tan(VFOV/2);
-  return (known*fp)/h;
+  // 限制最小距离 0.3 米，防止贴脸时飘
+  const rawDist = (known * fp) / h;
+  return Math.max(0.3, rawDist);
 }
 
 //计算两点距离
@@ -251,13 +266,20 @@ function getPixelDist(x1,y1,x2,y2){
 
 //简易墙面检测：画面下半部分像素色差小，判定近处墙体
 function detectWall(vw,vh){
-  const sampleH=Math.floor(vh*0.45);
-  const imgData=ctx.getImageData(0,vh-sampleH,vw,sampleH);
+  if(!video.videoWidth) return false;
+  // 用离屏canvas取样，缩小到160宽减少计算量
+  const sw=160, sh=Math.floor(sw*vh/vw);
+  if(!wallCanvas){wallCanvas=document.createElement('canvas');wallCtx=wallCanvas.getContext('2d',{willReadFrequently:true});}
+  wallCanvas.width=sw;wallCanvas.height=sh;
+  wallCtx.drawImage(video,0,0,sw,sh);
+  const sampleH=Math.floor(sh*0.5); // 下半部分取样
+  const imgData=wallCtx.getImageData(0,sh-sampleH,sw,sampleH);
   const data=imgData.data;
   let sumR=0,sumG=0,sumB=0;
   let variance=0;
-  const step=12;
+  const step=8;
   const count=Math.floor(data.length/4/step);
+  if(count<10) return false;
   for(let i=0;i<data.length;i+=4*step){
     sumR+=data[i];sumG+=data[i+1];sumB+=data[i+2];
   }
@@ -266,18 +288,18 @@ function detectWall(vw,vh){
     variance += Math.pow(data[i]-avgR,2)+Math.pow(data[i+1]-avgG,2)+Math.pow(data[i+2]-avgB,2);
   }
   variance /= count;
-  //方差小=颜色统一，墙面
-  return variance < 1200;
+  // 方差小=颜色统一=墙面/地面
+  // 同时判断平均亮度，排除全黑场景
+  const avgBright=(avgR+avgG+avgB)/3;
+  return variance < 900 && avgBright > 30;
 }
 
 function localSuggest(objs){
   if(!objs.length)return"前方暂未检测障碍，可以放心行走。";
   const danger=objs.filter(o=>o.danger);
-  if(danger.length){const d=danger[0];return`危险！前方${d.dist.toFixed(1)}米有${d.cn}，请停下绕行。`;}
-  const front=objs.filter(o=>o.isFront);
-  if(front.length){const f=front[0];return`正前方${f.dist.toFixed(1)}米有${f.cn}，放慢速度避让。`;}
-  const car=objs.filter(o=>["汽车","摩托车","公交车","卡车"].includes(o.cn));
-  if(car.length){const v=car[0];return`${v.dir}方向有${v.cn}，请靠路边行走。`;}
+  if(danger.length){const d=danger[0];return`危险！前方${Number(d.dist).toFixed(1)}米有障碍物，请停下绕行。`;}
+  const front=objs.filter(o=>o.dir==="正前方");
+  if(front.length){const f=front[0];return`正前方${Number(f.dist).toFixed(1)}米有障碍物，放慢速度避让。`;}
   return"路况正常，注意脚下。";
 }
 async function runAi(){
@@ -308,9 +330,10 @@ async function loop(){
       const [x,y,w,h]=o.bbox;
       const cx=x+w/2, cy=y+h/2;
       const nx=cx/vw;
-      const dist=getDist(o.class,h,vh);
+      const dist=getDist(o.class,h,vh,cy);
       const danger=dist<DANGER||(h/vh)>DANGER_BOX_RATIO;
       const dir=clockDir(nx),isFront=dir===12,cn=CLASS_CN[o.class];
+      const isFrontArea=(dir>=FRONT_START||dir<=FRONT_END);
       //生成简易id
       const objKey=o.class+"_"+Math.round(cx/15)+"_"+Math.round(cy/15);
       currObjMap.set(objKey,{cx,cy});
@@ -318,10 +341,12 @@ async function loop(){
       //判断行人是否静止
       let isMovingPerson=false;
       if(o.class==="person"){
-        const prev=currObjMap.has(objKey)?prevObjMap.get(objKey):null;
+        const prev=prevObjMap.get(objKey);
         if(prev){
           const d=getPixelDist(cx,cy,prev.cx,prev.cy);
-          isMovingPerson = d>MOVE_THRESHOLD;
+          // 将像素差转换为相对比例（不同分辨率下统一标准）
+          const relD = d / vw;
+          isMovingPerson = relD > 0.025; // 相对位移超过画面宽度2.5%判定为走动
         }
       }
 
@@ -332,7 +357,7 @@ async function loop(){
       if(o.class==="person") labelText += isMovingPerson?" (走动)":" (静止)";
       ctx.fillText(labelText,x,y-6);
 
-      objs.push({cn,dist,dir,isFront,danger,nx,cls:o.class,objKey,isMovingPerson});
+      objs.push({cn,dist,dir,isFront,isFrontArea,danger,nx,cls:o.class,objKey,isMovingPerson});
     }
     prevObjMap=currObjMap;
 
@@ -344,18 +369,17 @@ async function loop(){
     const top=objs[0];
     let wallDetected = detectWall(vw,vh);
 
-    //物体播报逻辑
-    if(top && top.isFront){
-      const clockName="正前方";
-      const id=top.cls+"_"+Math.round(top.nx*10);
+    //物体播报逻辑：10点~2点方向都播报，不播报具体物品名
+    if(top && top.isFrontArea && top.dist < 10){
+      const clockName=(top.dir===12)?"正前方":(top.dir+"点钟方向");
+      const id=top.cls+"_"+Math.round(top.nx*20);
       if(now-(track.get(id)||0)>=COOLDOWN){
-        //过滤条件：走动的行人不播报；静止行人、背包、其他障碍物全部播报
+        //过滤条件：走动的行人不播报
         const skipSpeak = (top.cls==="person" && top.isMovingPerson);
         if(!skipSpeak){
           track.set(id,now);
           const prefix=top.danger?"危险！":"注意：";
-          let txt=`${prefix}${clockName}，${top.dist.toFixed(1)}米，${top.cn}`;
-          if(top.cls==="person" && !top.isMovingPerson) txt+="，静止行人，请绕行";
+          let txt=`${prefix}${clockName}，${top.dist.toFixed(1)}米，有障碍物，请绕行`;
           speak(txt,!!top.danger);
           log(txt,top.danger?"danger":"warn");
         }
@@ -370,17 +394,17 @@ async function loop(){
       log(wallTxt,"danger");
       showDanger(wallTxt);
       setNow("danger","正前方墙体","小心碰撞");
-    }else if(!wallDetected && (!top || !top.isFront)){
+    }else if(!wallDetected && (!top || !top.isFrontArea)){
       setNow("ok","前方畅通","无正前方障碍物，请继续行走");
       hideDanger();
-    }else if(top && top.isFront){
-      let title="正前方 "+top.dist.toFixed(1)+"米 · "+top.cn;
-      if(top.cls==="person") title += top.isMovingPerson?" (走动)":" (静止)";
-      if(top.danger){setNow("danger",title,"危险！停下绕行");showDanger("危险！"+title);}
+    }else if(top && top.isFrontArea){
+      let dirLabel=(top.dir===12)?"正前方":(top.dir+"点钟");
+      let title=dirLabel+" "+top.dist.toFixed(1)+"米 · 障碍物";
+      if(top.danger){setNow("danger",title,"危险！停下绕行");showDanger("危险！"+dirLabel+"有障碍物");}
       else {setNow("warn",title,"注意障碍，放慢速度");hideDanger();}
     }
 
-    lastObjects=objs.map(o=>({cn:o.cn,dist:o.dist.toFixed(1),dir:o.dir===12?"正前方":o.dir+"点钟方向",danger:o.danger}));
+    lastObjects=objs.map(o=>({cn:o.cn,dist:o.dist,dir:o.dir===12?"正前方":o.dir+"点钟方向",danger:o.danger}));
     for(const [k,t] of track.entries()){if(now-t>COOLDOWN*3)track.delete(k);}
     if(now-lastAiTime>=AI_INTERVAL){lastAiTime=now;if(lastObjects.length) runAi();}
   }catch(err){log("识别出错:"+err.message,"warn")}
@@ -394,7 +418,12 @@ btnStart.onclick=async function(){
       log("navigator.mediaDevices不存在，环境不支持摄像头","danger");
       return;
     }
-    if(!isVoice){speak("语音已开启，暖阳视界开始播报",true);isVoice=true;}
+    if(!isVoice){
+      // 华为/苹果兼容性：先取消可能残留的队列再播报
+      try{speechSynthesis.cancel();}catch(e){}
+      speak("语音已开启，暖阳视界开始播报",true);
+      isVoice=true;
+    }
     if(running){
       running=false;isVoice=false;
       btnStartText.textContent="开启播报";btnStartSub.textContent="识别盲道障碍";
@@ -429,15 +458,43 @@ btnStart.onclick=async function(){
 
 let sosPhone=localStorage.getItem("sosPhone")||"";
 const askPhone=()=>{
-  const p=prompt("紧急联系人手机号：",sosPhone||"");
-  if(p){sosPhone=p.trim();localStorage.setItem("sosPhone",sosPhone);speak("联系人已设置",true);log("联系人已设置","ok");}
+  const p=prompt("设置紧急联系人手机号：",sosPhone||"");
+  if(p){
+    sosPhone=p.trim();
+    localStorage.setItem("sosPhone",sosPhone);
+    speak("紧急联系人已设置",true);
+    log("紧急联系人已设置："+sosPhone,"ok");
+    return true;
+  }
+  return false;
 };
-sosBtn.onclick=()=>{if(!sosPhone){askPhone();if(!sosPhone)return;}speak("正在拨打亲人",true);log("拨打 "+sosPhone,"danger");window.location.href="tel:"+sosPhone};
+const sosDial=()=>{
+  if(!sosPhone){
+    if(askPhone()){
+      speak("联系人已设置，再次点击即可拨打",false);
+    }
+    return;
+  }
+  speak("正在拨打紧急联系人",true);
+  log("拨打 "+sosPhone,"danger");
+  window.location.href="tel:"+sosPhone;
+};
+sosBtn.onclick=sosDial;
+// 长按2秒修改联系人：同时支持触屏和鼠标
 let sosTimer=null;
-sosBtn.ontouchstart=()=>sosTimer=setTimeout(askPhone,2000);
-sosBtn.ontouchend=sosBtn.ontouchmove=()=>{if(sosTimer)clearTimeout(sosTimer)};
+const sosPressStart=()=>{sosTimer=setTimeout(()=>{sosTimer=null;askPhone();},2000);};
+const sosPressEnd=()=>{if(sosTimer){clearTimeout(sosTimer);sosTimer=null;}};
+sosBtn.ontouchstart=sosPressStart;
+sosBtn.ontouchend=sosBtn.ontouchmove=sosPressEnd;
+sosBtn.onmousedown=sosPressStart;
+sosBtn.onmouseup=sosBtn.onmouseleave=sosPressEnd;
 
 btnNav.onclick=()=>{speak("打开地图导航",true);window.open("https://uri.amap.com/marker?name=当前位置&src=nuanyangshijie","_blank")};
+
+// 启动提示：未设置联系人时给出提示
+if(!sosPhone){
+  log("提示：长按下方红色按钮可设置紧急联系人","warn");
+}
 
 })();
 </script>
