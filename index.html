@@ -9,26 +9,26 @@
 <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/coco-ssd@2.2.3/dist/coco-ssd.min.js"></script>
 <style>
 :root{
-  --bg:#07090d;--bg-2:#0c1016;
-  --panel:rgba(255,255,255,0.06);--panel-2:rgba(255,255,255,0.04);
-  --line:rgba(255,255,255,0.08);--line-strong:rgba(255,255,255,0.14);
-  --txt:#f6f8fb;--txt-2:#9aa7b8;--txt-3:#6b7789;
-  --sun:#ff9f2e;--sun-soft:#ffd8a8;--sun-glow:rgba(255,159,46,0.35);
-  --ok:#2ecc8f;--ok-bg:rgba(46,204,143,0.12);
-  --warn:#ffb066;--warn-bg:rgba(255,176,102,0.14);
-  --danger:#ff5a5c;--danger-bg:rgba(255,90,92,0.16);
-  --radius:22px;--radius-sm:14px;
-  --shadow:0 20px 40px rgba(0,0,0,0.35);--shadow-soft:0 10px 24px rgba(0,0,0,0.25);
+--bg:#07090d;--bg-2:#0c1016;
+--panel:rgba(255,255,255,0.06);--panel-2:rgba(255,255,255,0.04);
+--line:rgba(255,255,255,0.08);--line-strong:rgba(255,255,255,0.14);
+--txt:#f6f8fb;--txt-2:#9aa7b8;--txt-3:#6b7789;
+--sun:#ff9f2e;--sun-soft:#ffd8a8;--sun-glow:rgba(255,159,46,0.35);
+--ok:#2ecc8f;--ok-bg:rgba(46,204,143,0.12);
+--warn:#ffb066;--warn-bg:rgba(255,176,102,0.14);
+--danger:#ff5a5c;--danger-bg:rgba(255,90,92,0.16);
+--radius:22px;--radius-sm:14px;
+--shadow:0 20px 40px rgba(0,0,0,0.35);--shadow-soft:0 10px 24px rgba(0,0,0,0.25);
 }
 *{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent}
 html,body{height:100%}
 body{
-  background:radial-gradient(1200px 500px at 80% -10%,rgba(255,159,46,0.12),transparent 60%),
-  radial-gradient(900px 400px at 10% 110%,rgba(46,204,143,0.08),transparent 60%),
-  linear-gradient(180deg,#07090d,#0c1016);
-  color:var(--txt);font-family:system-ui,sans-serif;
-  display:flex;flex-direction:column;min-height:100vh;
-  padding-top:env(safe-area-inset-top);padding-bottom:env(safe-area-inset-bottom);
+background:radial-gradient(1200px 500px at 80% -10%,rgba(255,159,46,0.12),transparent 60%),
+radial-gradient(900px 400px at 10% 110%,rgba(46,204,143,0.08),transparent 60%),
+linear-gradient(180deg,#07090d,#0c1016);
+color:var(--txt);font-family:system-ui,sans-serif;
+display:flex;flex-direction:column;min-height:100vh;
+padding-top:env(safe-area-inset-top);padding-bottom:env(safe-area-inset-bottom);
 }
 .wrap{flex:1;display:flex;flex-direction:column;max-width:640px;margin:0 auto;width:100%;padding:14px;gap:14px}
 header{display:flex;align-items:center;gap:12px;padding:6px 4px}
@@ -97,390 +97,532 @@ border-bottom:none;border-radius:16px 16px 0 0;padding:10px 14px;font-size:13px;
 #log{height:200px;overflow-y:auto;padding:12px 14px;font-size:13px;background:var(--panel);border:1px solid var(--line);
 border-radius:0 0 16px 16px;color:#c7d2e0;white-space:pre-wrap}
 #log .danger{color:#ff8f90}#log .warn{color:#ffb066}#log .ok{color:#7fe3bd}
+.legend{display:flex;gap:14px;flex-wrap:wrap;font-size:11px;color:var(--txt-2);padding:0 2px}
+.legend i{display:inline-block;width:20px;height:0;border-top-width:2px;border-top-style:solid;vertical-align:middle;margin-right:6px}
 @media (min-width:768px){.wrap{padding:24px}video{aspect-ratio:16/9}}
 </style>
 </head>
 <body>
 <div class="wrap">
-  <header>
-    <div class="brand">
-      <div class="logo"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="4" fill="currentColor" stroke="none"/><path d="M12 2v2M12 20v2M2 12h2M20 12h2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M19.1 4.9l-1.4 1.4M6.3 17.7l-1.4 1.4"/></svg></div>
-      <div><h1>暖阳视界</h1><p>盲道路况 AI 播报</p></div>
-    </div>
-    <div class="status-dot" id="statusDot"><span class="dot"></span><span id="statusText">待开启</span></div>
-  </header>
-  <div id="dangerBanner" role="alert" aria-live="assertive">
-    <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 3 2 20h20L12 3z"/><path d="M12 9v5"/><circle cx="12" cy="17" r=".6" fill="currentColor"/></svg>
-    <span id="dangerText">危险！</span>
-  </div>
-  <div id="camBox">
-    <video id="video" autoplay playsinline muted></video>
-    <canvas id="canvas"></canvas>
-    <div id="camPlaceholder">
-      <div><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="2" y="6" width="13" height="12" rx="2"/><path d="m15 10 5-3v10l-5-3"/></svg>
-      <b>摄像头待开启</b><span>点击下方「开启播报」开始识别路况</span></div>
-    </div>
-  </div>
-  <div id="nowCard">
-    <div id="nowIcon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 3"/></svg></div>
-    <div id="nowText"><div class="t">等待开启</div><div class="s" id="nowSub">开启后实时播报前方路况</div></div>
-  </div>
-  <div id="aiTip" aria-live="polite">
-    <span id="aiTipText">AI安全解说：正前方10点到2点方向障碍物自动播报，走动行人不播报。</span>
-  </div>
-  <div class="controls">
-    <button id="btnStart" class="btn btn-primary">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 11V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2v6"/><path d="M3 13a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2v4a2 2 0 0 1-2 2h-1"/><path d="M4 17h2v2H4z" fill="currentColor"/><path d="M14 11v6M12 13l2 2 2-2"/></svg>
-      <span id="btnStartText">开启播报</span><span class="sub" id="btnStartSub">识别盲道障碍</span>
-    </button>
-    <button id="btnNav" class="btn btn-nav">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 11 21 3l-8 18-2.5-7L3 11z"/><path d="M10.5 14 21 3"/></svg>
-      <span>一键导航</span><span class="sub">打开高德地图</span>
-    </button>
-  </div>
-  <div id="logHead" role="button" tabindex="0" aria-expanded="false"><b>运行日志</b><svg class="chev" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m6 9 6 6 6-6"/></svg></div>
-  <div id="logBody"><div id="log">— 暖阳视界已就绪，点击开启播报 —</div></div>
-  <div id="sosWrap">
-    <button id="sosBtn"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 16.9v3a2 2 0 0 1-2.2 2 19.8 19.8 0 0 1-8.6-3 19.5 19.5 0 0 1-6-6 19.8 19.8 0 0 1-3-8.7A2 2 0 0 1 4.1 2h3a2 2 0 0 1 2 1.7c.1 1 .4 2 .7 2.9a2 2 0 0 1-.5 2.1L8.1 9.9a16 16 0 0 0 6 6l1.2-1.2a2 2 0 0 1 2.1-.5c.9.3 1.9.6 2.9.7a2 2 0 0 1 1.7 2z"/></svg>紧急呼叫亲人</button>
-    <div id="sosHint">点击拨打 · 长按2秒修改联系人</div>
-  </div>
+<header>
+<div class="brand">
+<div class="logo"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="4" fill="currentColor" stroke="none"/><path d="M12 2v2M12 20v2M2 12h2M20 12h2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M19.1 4.9l-1.4 1.4M6.3 17.7l-1.4 1.4"/></svg></div>
+<div><h1>暖阳视界</h1><p>盲道路况 AI 播报</p></div>
 </div>
-
+<div class="status-dot" id="statusDot"><span class="dot"></span><span id="statusText">待开启</span></div>
+</header>
+<div id="dangerBanner" role="alert" aria-live="assertive">
+<svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 3 2 20h20L12 3z"/><path d="M12 9v5"/><circle cx="12" cy="17" r=".6" fill="currentColor"/></svg>
+<span id="dangerText">危险！</span>
+</div>
+<div id="camBox">
+<video id="video" autoplay playsinline muted></video>
+<canvas id="canvas"></canvas>
+<div id="camPlaceholder">
+<div><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="2" y="6" width="13" height="12" rx="2"/><path d="m15 10 5-3v10l-5-3"/></svg>
+<b>摄像头待开启</b><span>点击下方「开启播报」开始识别路况</span></div>
+</div>
+</div>
+<div class="legend"><span><i style="border-color:#ffd166"></i>COCO识别</span><span><i style="border-color:#2ecc8f;border-style:dashed"></i>通用障碍</span><span><i style="border-color:#ff5a5c;border-style:dashed"></i>危险</span></div>
+<div id="nowCard">
+<div id="nowIcon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 3"/></svg></div>
+<div id="nowText"><div class="t">等待开启</div><div class="s" id="nowSub">开启后实时播报前方路况</div></div>
+</div>
+<div id="aiTip" aria-live="polite">
+<span id="aiTipText">AI安全解说：前方障碍自动播报，走动行人不播报。</span>
+</div>
+<div class="controls">
+<button id="btnStart" class="btn btn-primary">
+<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 11V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2v6"/><path d="M3 13a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2v4a2 2 0 0 1-2 2h-1"/><path d="M4 17h2v2H4z" fill="currentColor"/><path d="M14 11v6M12 13l2 2 2-2"/></svg>
+<span id="btnStartText">开启播报</span><span class="sub" id="btnStartSub">识别盲道障碍</span>
+</button>
+<button id="btnNav" class="btn btn-nav">
+<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 11 21 3l-8 18-2.5-7L3 11z"/><path d="M10.5 14 21 3"/></svg>
+<span>一键导航</span><span class="sub">打开高德地图</span>
+</button>
+</div>
+<div id="logHead" role="button" tabindex="0" aria-expanded="false"><b>运行日志</b><svg class="chev" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m6 9 6 6 6-6"/></svg></div>
+<div id="logBody"><div id="log">— 暖阳视界已就绪，点击开启播报 —</div></div>
+<div id="sosWrap">
+<button id="sosBtn"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 16.9v3a2 2 0 0 1-2.2 2 19.8 19.8 0 0 1-8.6-3 19.5 19.5 0 0 1-6-6 19.8 19.8 0 0 1-3-8.7A2 2 0 0 1 4.1 2h3a2 2 0 0 1 2 1.7c.1 1 .4 2 .7 2.9a2 2 0 0 1-.5 2.1L8.1 9.9a16 16 0 0 0 6 6l1.2-1.2a2 2 0 0 1 2.1-.5c.9.3 1.9.6 2.9.7a2 2 0 0 1 1.7 2z"/></svg>紧急呼叫亲人</button>
+<div id="sosHint">点击拨打 · 长按2秒修改联系人</div>
+</div>
+</div>
 <script>
 (function(){
 "use strict";
-//新增backpack背包
+
+/* ============ 常量 ============ */
 const targetClasses=["person","bicycle","car","motorcycle","bus","truck","fire hydrant","traffic light","stop sign","bench","potted plant","dog","cat","backpack"];
 const CLASS_CN={
-  person:"行人",bicycle:"自行车",car:"汽车",motorcycle:"摩托车",bus:"公交车",truck:"卡车",
-  "fire hydrant":"消防栓","traffic light":"红绿灯","stop sign":"停车标志",bench:"长椅",
-  "potted plant":"盆栽",dog:"狗",cat:"猫",backpack:"背包"
+person:"行人",bicycle:"自行车",car:"汽车",motorcycle:"摩托车",bus:"公交车",truck:"卡车",
+"fire hydrant":"消防栓","traffic light":"红绿灯","stop sign":"停车标志",bench:"长椅",
+"potted plant":"盆栽",dog:"狗",cat:"猫",backpack:"背包"
 };
+/* 参考高度(米)：距离=参考高*focal/像素高 */
 const KNOWN={
-  person:1.65,bicycle:1.1,car:1.6,motorcycle:1.3,bus:3.2,truck:3.2,"fire hydrant":0.75,
-  "traffic light":2.8,"stop sign":0.75,bench:0.9,"potted plant":0.8,dog:0.6,cat:0.35,backpack:0.5
+person:1.65,bicycle:1.1,car:1.6,motorcycle:1.2,bus:3.5,truck:3.5,"fire hydrant":0.8,
+"traffic light":2.8,"stop sign":0.9,bench:0.9,"potted plant":0.8,dog:0.55,cat:0.35,backpack:0.5
 };
-const VFOV=52*Math.PI/180,DANGER=3,DANGER_BOX_RATIO=0.28,COOLDOWN=4000,AI_INTERVAL=15000,LOOP_DELAY=800;
+const VFOV=52*Math.PI/180;      // 更接近手机后置摄像头实际视角
+const DANGER=3;                 // COCO 物体危险距离(米)
+const DANGER_BOX_RATIO=0.28;    // COCO 物体占屏比危险阈值
+const COOLDOWN=4000;            // 同物体播报冷却(ms)
+const AI_INTERVAL=15000,LOOP_DELAY=800;
 const FRONT_START=10,FRONT_END=2; // 10点~2点方向都算前方播报
-const WALL_COOLDOWN=6000;
-let lastWallAlert=0;
+
+/* ============ 墙面检测(重做版) ============ */
+const WALL_REF_HEIGHT=2.4;      // 墙面参考高度(米,约一层楼/门高度)
+const WALL_DANGER_DIST=2.5;     // 2.5米内报警
+const WALL_DIFF=26;             // 与地面色差阈值
+const WALL_MIN_ROWS=6;          // 最少连续行数才算墙
+const WALL_STEP=3;              // 纵向扫描步长
+const WALL_MIN_HEIGHT_RATIO=0.3;// 墙面至少占画面30%高度
+const WALL_COOLDOWN=4000;
+let lastWallAlert=0,wallResult=null;
+let wallCanvas=null,wallCtx=null;
+
+/* ============ 通用障碍物检测 ============ */
+const GEN_DIFF=32;              // 与地面色差阈值
+const GEN_REF_HEIGHT=0.5;       // 通用障碍参考高度(米,路牙/台阶/锥桶等)
+const GEN_DANGER_DIST=2.5;      // 通用障碍危险距离(米)
+const GEN_BOX_RATIO=0.22;       // 通用障碍占屏比危险阈值
+const GEN_SPEAK_DIST=8;         // 通用障碍播报距离上限(米)
+const GEN_MIN_AREA=8;           // 连通块最小像素数(缩略图)
+const GEN_STRIDE_X=3,GEN_STRIDE_Y=2;
+let genCanvas=null,genCtx=null;
+let genericTrack=new Map();     // 通用障碍播报去重
 
 let supportTTS=!!window.speechSynthesis;
 let ttsWarmedUp=false;
 let preferredVoice=null;
 function loadVoices(){
-  if(!supportTTS) return;
-  const voices=speechSynthesis.getVoices();
-  preferredVoice=null;
-  const androidZh=["google","普通话","zh-cn","zh-Hans"];
-  for(let v of voices){
-    const n=v.name.toLowerCase(),l=v.lang.toLowerCase();
-    if(l.startsWith("zh")){
-      if(androidZh.some(k=>n.includes(k))) {preferredVoice=v;break;}
-    }
-  }
-  if(!preferredVoice) preferredVoice=voices.find(v=>v.lang.startsWith("zh"))||null;
+if(!supportTTS) return;
+const voices=speechSynthesis.getVoices();
+preferredVoice=null;
+const androidZh=["google","普通话","zh-cn","zh-Hans"];
+for(let v of voices){
+const n=v.name.toLowerCase(),l=v.lang.toLowerCase();
+if(l.startsWith("zh")){
+if(androidZh.some(k=>n.includes(k))) {preferredVoice=v;break;}
+}
+}
+if(!preferredVoice) preferredVoice=voices.find(v=>v.lang.startsWith("zh"))||null;
 }
 if(supportTTS){
-  speechSynthesis.addEventListener('voiceschanged',loadVoices);
-  loadVoices();
+speechSynthesis.addEventListener('voiceschanged',loadVoices);
+loadVoices();
 }
-
 const video=document.getElementById('video'),canvas=document.getElementById('canvas'),ctx=canvas.getContext('2d');
 const logDiv=document.getElementById('log'),statusText=document.getElementById('statusText'),statusDot=document.getElementById('statusDot');
 const aiTipText=document.getElementById('aiTipText'),btnStart=document.getElementById('btnStart'),btnStartText=document.getElementById('btnStartText'),btnStartSub=document.getElementById('btnStartSub');
 const btnNav=document.getElementById('btnNav'),sosBtn=document.getElementById('sosBtn'),camBox=document.getElementById('camBox');
 const nowIcon=document.getElementById('nowIcon'),nowTextT=document.querySelector('#nowText .t'),nowTextS=document.getElementById('nowSub');
 const dangerBanner=document.getElementById('dangerBanner'),dangerText=document.getElementById('dangerText'),logHead=document.getElementById('logHead'),logBody=document.getElementById('logBody');
-
 let model=null,track=new Map(),isVoice=false,running=false,lastObjects=[],lastAiTime=0;
-let wallCanvas=null,wallCtx=null;
-let prevObjMap=new Map(); //保存上一帧物体中心点 {key:{cx,cy}}
-
+let prevObjMap=new Map();
 function log(m,cls){
-  const d=new Date();
-  const t=('0'+d.getHours()).slice(-2)+':'+('0'+d.getMinutes()).slice(-2)+':'+('0'+d.getSeconds()).slice(-2);
-  const span=document.createElement('span');
-  span.className=cls||'info';
-  span.textContent=`[${t}] ${m}\n`;
-  logDiv.appendChild(span);
-  logDiv.scrollTop=logDiv.scrollHeight;
+const d=new Date();
+const t=('0'+d.getHours()).slice(-2)+':'+('0'+d.getMinutes()).slice(-2)+':'+('0'+d.getSeconds()).slice(-2);
+const span=document.createElement('span');
+span.className=cls||'info';
+span.textContent=`[${t}] ${m}\n`;
+logDiv.appendChild(span);
+logDiv.scrollTop=logDiv.scrollHeight;
 }
 logHead.onclick=()=>{
-  const o=logBody.classList.toggle('open');
-  logHead.setAttribute('aria-expanded',o);
-  logHead.querySelector('.chev').style.transform=o?'rotate(180deg)':'';
+const o=logBody.classList.toggle('open');
+logHead.setAttribute('aria-expanded',o);
+logHead.querySelector('.chev').style.transform=o?'rotate(180deg)':'';
 };
 logHead.onkeydown=e=>{if(e.key==='Enter'||e.key===' '){e.preventDefault();logHead.onclick()}};
 
+/* ============ 语音队列 ============ */
 class VQ{
-  constructor(){this.q=[];this.p=false;}
-  speak(t,urgent){
-    if(!supportTTS){ log("设备不支持语音播报","warn"); return; }
-    // iOS/华为 预热：首次播报前先播一个极短静音内容激活语音引擎
-    if(!ttsWarmedUp){
-      ttsWarmedUp=true;
-      try{
-        const warm=new SpeechSynthesisUtterance(" ");
-        warm.volume=0;warm.rate=2;speechSynthesis.speak(warm);
-      }catch(e){}
-    }
-    if(urgent){this.q=[];try{speechSynthesis.cancel();}catch(e){}this.p=false;}
-    this.q.push(t);if(!this.p)this.go();
-  }
-  go(){
-    if(!this.q.length){this.p=false;return;}
-    this.p=true;
-    const u=new SpeechSynthesisUtterance(this.q.shift());
-    u.lang="zh-CN";u.rate=1.12;u.pitch=1.0;
-    if(preferredVoice) u.voice=preferredVoice;
-    let done=false;
-    const next=()=>{if(done)return;done=true;setTimeout(()=>this.go(),180);};
-    u.onend=()=>next();
-    u.onerror=e=>{log("语音异常:"+e.error,"warn");next();};
-    // 华为/iOS 部分机型 onend 可能不触发，加超时兜底
-    const est=Math.max(2000, u.text.length*200);
-    setTimeout(next, est);
-    speechSynthesis.speak(u);
-  }
+constructor(){this.q=[];this.p=false;}
+speak(t,urgent){
+if(!supportTTS){log("设备不支持语音播报","warn");return;}
+if(!ttsWarmedUp){
+ttsWarmedUp=true;
+try{const warm=new SpeechSynthesisUtterance(" ");warm.volume=0;warm.rate=2;speechSynthesis.speak(warm);}catch(e){}
+}
+if(urgent){this.q=[];try{speechSynthesis.cancel();}catch(e){}this.p=false;}
+this.q.push(t);if(!this.p)this.go();
+}
+go(){
+if(!this.q.length){this.p=false;return;}
+this.p=true;
+const u=new SpeechSynthesisUtterance(this.q.shift());
+u.lang="zh-CN";u.rate=1.12;u.pitch=1.0;
+if(preferredVoice) u.voice=preferredVoice;
+let done=false;
+const next=()=>{if(done)return;done=true;setTimeout(()=>this.go(),180);};
+u.onend=()=>next();
+u.onerror=e=>{log("语音异常:"+e.error,"warn");next();};
+const est=Math.max(2000,u.text.length*200);
+setTimeout(next,est);
+speechSynthesis.speak(u);
+}
 }
 const vq=new VQ();
 const speak=(t,urgent)=>{try{vq.speak(t,urgent);}catch(e){log("语音报错："+e.message,"warn")}};
 
+/* ============ 基础工具 ============ */
 function clockDir(nx){
-  const c=Math.round(((nx-0.5)*2*90)/30);
-  if(c===0)return 12;return c>0?c:12+c;
+const c=Math.round(((nx-0.5)*2*90)/30);
+if(c===0)return 12;return c>0?c:12+c;
 }
+function getFocal(vh){return (vh/2)/Math.tan(VFOV/2);}
 function getDist(cls,h,vh,cy){
-  const known=KNOWN[cls]||0.8;if(h<=0)return 99;
-  const fp=(vh/2)/Math.tan(VFOV/2);
-  // 限制最小距离 0.3 米，防止贴脸时飘
-  const rawDist = (known * fp) / h;
-  return Math.max(0.3, rawDist);
+const known=KNOWN[cls]||0.8;if(h<=0)return 99;
+const fp=(vh/2)/Math.tan(VFOV/2);
+return Math.max(0.3,(known*fp)/h);
+}
+function getPixelDist(x1,y1,x2,y2){return Math.hypot(x1-x2,y1-y2);}
+function iou(a,b){
+const x1=Math.max(a.x,b.x),y1=Math.max(a.y,b.y),x2=Math.min(a.x+a.w,b.x+b.w),y2=Math.min(a.y+a.h,b.y+b.h);
+const iw=Math.max(0,x2-x1),ih=Math.max(0,y2-y1),i=iw*ih;
+const u=a.w*a.h+b.w*b.h-i;return u?i/u:0;
 }
 
-//计算两点距离
-function getPixelDist(x1,y1,x2,y2){
-  return Math.hypot(x1-x2,y1-y2);
+/* ============ 墙面检测(重做)：地面色参考+自下而上扫描+距离估算 ============ */
+function analyzeWall(vw,vh){
+if(!video.videoWidth) return null;
+const sw=96,sh=Math.max(32,Math.floor(sw*vh/vw));
+if(!wallCanvas){wallCanvas=document.createElement('canvas');wallCtx=wallCanvas.getContext('2d',{willReadFrequently:true});}
+wallCanvas.width=sw;wallCanvas.height=sh;
+wallCtx.drawImage(video,0,0,sw,sh);
+const img=wallCtx.getImageData(0,0,sw,sh).data;
+// 1) 取画面底部14%作为"地面参考色"
+const gh=Math.max(4,Math.floor(sh*0.14));
+let r=0,g=0,b=0,n=0;
+for(let y=sh-gh;y<sh;y+=2)for(let x=0;x<sw;x+=3){const i=(y*sw+x)*4;r+=img[i];g+=img[i+1];b+=img[i+2];n++;}
+if(!n)return null;
+r/=n;g/=n;b/=n;
+if((r+g+b)/3<26)return null; // 环境过暗不判断
+// 2) 从下往上扫描，找与地面色差持续超过阈值的"墙面段"
+let runY0=-1,runY1=-1,runLen=0,found=false;
+for(let y=sh-1;y>=0;y-=WALL_STEP){
+let rr=0,gg=0,bb=0;
+for(let x=0;x<sw;x+=2){const i=(y*sw+x)*4;rr+=img[i];gg+=img[i+1];bb+=img[i+2];}
+const cnt=Math.ceil(sw/2);rr/=cnt;gg/=cnt;bb/=cnt;
+const d=Math.sqrt((rr-r)*(rr-r)+(gg-g)*(gg-g)+(bb-b)*(bb-b));
+if(d>WALL_DIFF){
+if(runLen===0)runY0=y;    // 墙面底部(行号大)
+runLen++;
+if(y===0){runY1=0;found=true;break;} // 墙延伸到画面顶部
+}else{
+if(runLen>=WALL_MIN_ROWS){runY1=y+WALL_STEP;found=true;break;}
+runLen=0;runY0=-1;
+}
+}
+if(!found||runLen<WALL_MIN_ROWS)return null;
+// 3) 墙面在画面中的高度占比 → 估算距离
+const wallH=runY0-runY1+WALL_STEP;
+const ratio=wallH/sh;
+if(ratio<WALL_MIN_HEIGHT_RATIO)return null;
+const wallPx=ratio*vh;
+const fp=getFocal(vh);
+const dist=Math.max(0.3,WALL_REF_HEIGHT*fp/wallPx);
+return {dist,ratio,base:runY0,top:runY1}; // base>top
 }
 
-//简易墙面检测：画面下半部分像素色差小，判定近处墙体
-function detectWall(vw,vh){
-  if(!video.videoWidth) return false;
-  // 用离屏canvas取样，缩小到160宽减少计算量
-  const sw=160, sh=Math.floor(sw*vh/vw);
-  if(!wallCanvas){wallCanvas=document.createElement('canvas');wallCtx=wallCanvas.getContext('2d',{willReadFrequently:true});}
-  wallCanvas.width=sw;wallCanvas.height=sh;
-  wallCtx.drawImage(video,0,0,sw,sh);
-  const sampleH=Math.floor(sh*0.5); // 下半部分取样
-  const imgData=wallCtx.getImageData(0,sh-sampleH,sw,sampleH);
-  const data=imgData.data;
-  let sumR=0,sumG=0,sumB=0;
-  let variance=0;
-  const step=8;
-  const count=Math.floor(data.length/4/step);
-  if(count<10) return false;
-  for(let i=0;i<data.length;i+=4*step){
-    sumR+=data[i];sumG+=data[i+1];sumB+=data[i+2];
-  }
-  const avgR=sumR/count,avgG=sumG/count,avgB=sumB/count;
-  for(let i=0;i<data.length;i+=4*step){
-    variance += Math.pow(data[i]-avgR,2)+Math.pow(data[i+1]-avgG,2)+Math.pow(data[i+2]-avgB,2);
-  }
-  variance /= count;
-  // 方差小=颜色统一=墙面/地面
-  // 同时判断平均亮度，排除全黑场景
-  const avgBright=(avgR+avgG+avgB)/3;
-  return variance < 900 && avgBright > 30;
+/* ============ 通用障碍物检测：不靠COCO，找画面中"不是地面"的凸起物 ============ */
+function analyzeGeneric(vw,vh){
+const sw=120,sh=Math.max(32,Math.floor(sw*vh/vw));
+if(!genCanvas){genCanvas=document.createElement('canvas');genCtx=genCanvas.getContext('2d',{willReadFrequently:true});}
+genCanvas.width=sw;genCanvas.height=sh;
+genCtx.drawImage(video,0,0,sw,sh);
+const img=genCtx.getImageData(0,0,sw,sh).data;
+const diffMap=new Uint8Array(sw*sh);
+// 1) 逐列：底部16%为该列地面参考，从下往上标出"非地面"像素
+for(let x=0;x<sw;x+=GEN_STRIDE_X){
+const gh=Math.max(2,Math.floor(sh*0.16));
+let r=0,g=0,b=0,cn=0;
+for(let y=sh-gh;y<sh;y+=2){const i=(y*sw+x)*4;r+=img[i];g+=img[i+1];b+=img[i+2];cn++;}
+if(!cn)continue;
+r/=cn;g/=cn;b/=cn;
+if((r+g+b)/3<24)continue; // 该列过暗，跳过(防全黑误报)
+for(let y=sh-1;y>=0;y-=GEN_STRIDE_Y){
+const i=(y*sw+x)*4;
+const d=Math.sqrt((img[i]-r)*(img[i]-r)+(img[i+1]-g)*(img[i+1]-g)+(img[i+2]-b)*(img[i+2]-b));
+if(d>GEN_DIFF)diffMap[y*sw+x]=1;
+}
+}
+// 2) 并查集连通分量
+const parent=new Int32Array(sw*sh).fill(-1);
+function find(a){while(parent[a]!==a){parent[a]=parent[parent[a]];a=parent[a];}return a;}
+for(let y=0;y<sh;y+=GEN_STRIDE_Y){
+for(let x=0;x<sw;x+=GEN_STRIDE_X){
+const idx=y*sw+x;if(!diffMap[idx])continue;
+parent[idx]=idx;
+const nb=[[x-GEN_STRIDE_X,y],[x-GEN_STRIDE_X,y-GEN_STRIDE_Y],[x,y-GEN_STRIDE_Y],[x+GEN_STRIDE_X,y-GEN_STRIDE_Y]];
+for(const [nx,ny]of nb){
+if(nx<0||ny<0||nx>=sw)continue;
+const ni=ny*sw+nx;
+if(diffMap[ni]&&parent[ni]>=0){
+const ra=find(idx),rb=find(ni);if(ra!==rb)parent[ra]=rb;
+}
+}
+}
+}
+// 3) 汇总连通块包围盒
+const stats=new Map();
+for(let y=0;y<sh;y+=GEN_STRIDE_Y){
+for(let x=0;x<sw;x+=GEN_STRIDE_X){
+const idx=y*sw+x;if(parent[idx]<0)continue;
+const root=find(idx);
+let s=stats.get(root);
+if(!s){s={minX:x,maxX:x,minY:y,maxY:y,cnt:0};stats.set(root,s);}
+if(x<s.minX)s.minX=x;if(x>s.maxX)s.maxX=x;
+if(y<s.minY)s.minY=y;if(y>s.maxY)s.maxY=y;s.cnt++;
+}
+}
+// 4) 过滤小面积，转成全尺寸框
+const boxes=[];
+const scaleX=vw/sw,scaleY=vh/sh;
+const fp=getFocal(vh);
+for(const s of stats.values()){
+if(s.cnt<GEN_MIN_AREA)continue;
+const w=(s.maxX-s.minX+GEN_STRIDE_X)*scaleX;
+const h=(s.maxY-s.minY+GEN_STRIDE_Y)*scaleY;
+if(h<6||w<6)continue; // 过小
+const x=s.minX*scaleX,y=s.minY*scaleY;
+const cx=x+w/2,cy=y+h/2;
+const dist=Math.max(0.3,GEN_REF_HEIGHT*fp/h);
+const danger=dist<GEN_DANGER_DIST||(h/vh)>GEN_BOX_RATIO;
+boxes.push({x,y,w,h,cx,cy,nx:cx/vw,dir:clockDir(cx/vw),dist,danger,isFrontArea:(clockDir(cx/vw)>=FRONT_START||clockDir(cx/vw)<=FRONT_END)});
+}
+return boxes;
 }
 
+/* ============ AI解说 ============ */
 function localSuggest(objs){
-  if(!objs.length)return"前方暂未检测障碍，可以放心行走。";
-  const danger=objs.filter(o=>o.danger);
-  if(danger.length){const d=danger[0];return`危险！前方${Number(d.dist).toFixed(1)}米有障碍物，请停下绕行。`;}
-  const front=objs.filter(o=>o.dir==="正前方");
-  if(front.length){const f=front[0];return`正前方${Number(f.dist).toFixed(1)}米有障碍物，放慢速度避让。`;}
-  return"路况正常，注意脚下。";
+if(!objs.length)return"前方暂未检测障碍，可以放心行走。";
+const danger=objs.filter(o=>o.danger);
+if(danger.length){const d=danger[0];return`危险！前方${Number(d.dist).toFixed(1)}米有障碍物，请停下绕行。`;}
+const front=objs.filter(o=>o.dir==="正前方");
+if(front.length){const f=front[0];return`正前方${Number(f.dist).toFixed(1)}米有障碍物，放慢速度避让。`;}
+return"路况正常，注意脚下。";
 }
 async function runAi(){
-  const objs=lastObjects;
-  if(!objs.length){aiTipText.textContent="AI安全解说：画面无障碍物，可以前行。";return;}
-  const reply=localSuggest(objs);
-  aiTipText.textContent="AI建议："+reply;
-  speak(reply,false);log("AI建议："+reply);
+const objs=lastObjects;
+if(!objs.length){aiTipText.textContent="AI安全解说：画面无障碍物，可以前行。";return;}
+const reply=localSuggest(objs);
+aiTipText.textContent="AI建议："+reply;
+speak(reply,false);log("AI建议："+reply);
 }
-
 function setStatus(txt,cls){statusText.textContent=txt;statusDot.classList.toggle('on',cls==='on')}
 function setNow(state,title,sub){nowIcon.className=state;nowTextT.textContent=title;nowTextS.textContent=sub||''}
 const showDanger=t=>{dangerText.textContent=t;dangerBanner.classList.add('show')};
 const hideDanger=()=>dangerBanner.classList.remove('show');
 
+/* ============ 主循环 ============ */
 async function loop(){
-  if(!running)return;
-  if(!model||!video.srcObject||!video.videoWidth){setTimeout(loop,LOOP_DELAY);return;}
-  try{
-    const preds=await model.detect(video,20,0.4,0.5);
-    const vw=video.videoWidth,vh=video.videoHeight;
-    canvas.width=vw;canvas.height=vh;ctx.clearRect(0,0,vw,vh);
-    const now=Date.now();let objs=[];
-    const currObjMap=new Map();
+if(!running)return;
+if(!model||!video.srcObject||!video.videoWidth){setTimeout(loop,LOOP_DELAY);return;}
+try{
+const preds=await model.detect(video,20,0.4,0.5);
+const vw=video.videoWidth,vh=video.videoHeight;
+canvas.width=vw;canvas.height=vh;ctx.clearRect(0,0,vw,vh);
+const now=Date.now();let objs=[];
+const currObjMap=new Map();
 
-    for(let o of preds){
-      if(targetClasses.indexOf(o.class)<0)continue;
-      const [x,y,w,h]=o.bbox;
-      const cx=x+w/2, cy=y+h/2;
-      const nx=cx/vw;
-      const dist=getDist(o.class,h,vh,cy);
-      const danger=dist<DANGER||(h/vh)>DANGER_BOX_RATIO;
-      const dir=clockDir(nx),isFront=dir===12,cn=CLASS_CN[o.class];
-      const isFrontArea=(dir>=FRONT_START||dir<=FRONT_END);
-      //生成简易id
-      const objKey=o.class+"_"+Math.round(cx/15)+"_"+Math.round(cy/15);
-      currObjMap.set(objKey,{cx,cy});
-
-      //判断行人是否静止
-      let isMovingPerson=false;
-      if(o.class==="person"){
-        const prev=prevObjMap.get(objKey);
-        if(prev){
-          const d=getPixelDist(cx,cy,prev.cx,prev.cy);
-          // 将像素差转换为相对比例（不同分辨率下统一标准）
-          const relD = d / vw;
-          isMovingPerson = relD > 0.025; // 相对位移超过画面宽度2.5%判定为走动
-        }
-      }
-
-      ctx.strokeStyle=danger?"#ff4d4f":isFront?"#ff9f2e":"#ffd166";
-      ctx.lineWidth=3;ctx.strokeRect(x,y,w,h);
-      ctx.fillStyle=ctx.strokeStyle;ctx.font="15px sans-serif";
-      let labelText=cn+" "+dist.toFixed(1)+"m";
-      if(o.class==="person") labelText += isMovingPerson?" (走动)":" (静止)";
-      ctx.fillText(labelText,x,y-6);
-
-      objs.push({cn,dist,dir,isFront,isFrontArea,danger,nx,cls:o.class,objKey,isMovingPerson});
-    }
-    prevObjMap=currObjMap;
-
-    objs.sort((a,b)=>{
-      if(a.danger!==b.danger) return a.danger?-1:1;
-      if(a.isFront!==b.isFront) return a.isFront?-1:1;
-      return a.dist-b.dist;
-    });
-    const top=objs[0];
-    let wallDetected = detectWall(vw,vh);
-
-    //物体播报逻辑：10点~2点方向都播报，不播报具体物品名
-    if(top && top.isFrontArea && top.dist < 10){
-      const clockName=(top.dir===12)?"正前方":(top.dir+"点钟方向");
-      const id=top.cls+"_"+Math.round(top.nx*20);
-      if(now-(track.get(id)||0)>=COOLDOWN){
-        //过滤条件：走动的行人不播报
-        const skipSpeak = (top.cls==="person" && top.isMovingPerson);
-        if(!skipSpeak){
-          track.set(id,now);
-          const prefix=top.danger?"危险！":"注意：";
-          let txt=`${prefix}${clockName}，${top.dist.toFixed(1)}米，有障碍物，请绕行`;
-          speak(txt,!!top.danger);
-          log(txt,top.danger?"danger":"warn");
-        }
-      }
-    }
-
-    //墙体预警逻辑
-    if(wallDetected && now - lastWallAlert > WALL_COOLDOWN){
-      lastWallAlert = now;
-      const wallTxt="危险！正前方墙体，小心碰撞，请停下";
-      speak(wallTxt,true);
-      log(wallTxt,"danger");
-      showDanger(wallTxt);
-      setNow("danger","正前方墙体","小心碰撞");
-    }else if(!wallDetected && (!top || !top.isFrontArea)){
-      setNow("ok","前方畅通","无正前方障碍物，请继续行走");
-      hideDanger();
-    }else if(top && top.isFrontArea){
-      let dirLabel=(top.dir===12)?"正前方":(top.dir+"点钟");
-      let title=dirLabel+" "+top.dist.toFixed(1)+"米 · 障碍物";
-      if(top.danger){setNow("danger",title,"危险！停下绕行");showDanger("危险！"+dirLabel+"有障碍物");}
-      else {setNow("warn",title,"注意障碍，放慢速度");hideDanger();}
-    }
-
-    lastObjects=objs.map(o=>({cn:o.cn,dist:o.dist,dir:o.dir===12?"正前方":o.dir+"点钟方向",danger:o.danger}));
-    for(const [k,t] of track.entries()){if(now-t>COOLDOWN*3)track.delete(k);}
-    if(now-lastAiTime>=AI_INTERVAL){lastAiTime=now;if(lastObjects.length) runAi();}
-  }catch(err){log("识别出错:"+err.message,"warn")}
-  setTimeout(loop,LOOP_DELAY);
+/* ---- A. COCO 物体识别：实线框 + 播报 ---- */
+for(let o of preds){
+if(targetClasses.indexOf(o.class)<0)continue;
+const [x,y,w,h]=o.bbox;
+const cx=x+w/2,cy=y+h/2;
+const nx=cx/vw;
+const dist=getDist(o.class,h,vh,cy);
+const danger=dist<DANGER||(h/vh)>DANGER_BOX_RATIO;
+const dir=clockDir(nx),isFront=dir===12,cn=CLASS_CN[o.class];
+const isFrontArea=(dir>=FRONT_START||dir<=FRONT_END);
+const objKey=o.class+"_"+Math.round(cx/15)+"_"+Math.round(cy/15);
+currObjMap.set(objKey,{cx,cy});
+let isMovingPerson=false;
+if(o.class==="person"){
+const prev=prevObjMap.get(objKey);
+if(prev){
+const d=getPixelDist(cx,cy,prev.cx,prev.cy);
+const relD=d/vw;
+isMovingPerson=relD>0.025;
+}
+}
+ctx.strokeStyle=danger?"#ff4d4f":isFront?"#ff9f2e":"#ffd166";
+ctx.lineWidth=3;ctx.strokeRect(x,y,w,h);
+ctx.fillStyle=ctx.strokeStyle;ctx.font="15px sans-serif";
+let labelText=cn+" "+dist.toFixed(1)+"m";
+if(o.class==="person")labelText+=isMovingPerson?" (走动)":" (静止)";
+ctx.fillText(labelText,x,y-6);
+objs.push({cn,dist,dir,isFront,isFrontArea,danger,nx,cls:o.class,objKey,isMovingPerson,bbox:{x,y,w,h}});
+}
+prevObjMap=currObjMap;
+objs.sort((a,b)=>{
+if(a.danger!==b.danger)return a.danger?-1:1;
+if(a.isFront!==b.isFront)return a.isFront?-1:1;
+return a.dist-b.dist;
+});
+const top=objs[0];
+if(top&&top.isFrontArea&&top.dist<10){
+const clockName=(top.dir===12)?"正前方":(top.dir+"点钟方向");
+const id=top.cls+"_"+Math.round(top.nx*20);
+if(now-(track.get(id)||0)>=COOLDOWN){
+const skipSpeak=(top.cls==="person"&&top.isMovingPerson);
+if(!skipSpeak){
+track.set(id,now);
+const prefix=top.danger?"危险！":"注意：";
+const txt=`${prefix}${clockName}，${top.dist.toFixed(1)}米，有障碍物，请绕行`;
+speak(txt,!!top.danger);
+log(txt,top.danger?"danger":"warn");
+}
+}
 }
 
-btnStart.onclick=async function(){
-  try{
-    if(!navigator.mediaDevices){
-      alert("❌当前环境不支持摄像头！\n请使用Chrome/Edge浏览器，不要微信打开，不要本地直接打开html文件。");
-      log("navigator.mediaDevices不存在，环境不支持摄像头","danger");
-      return;
-    }
-    if(!isVoice){
-      // 华为/苹果兼容性：先取消可能残留的队列再播报
-      try{speechSynthesis.cancel();}catch(e){}
-      speak("语音已开启，暖阳视界开始播报",true);
-      isVoice=true;
-    }
-    if(running){
-      running=false;isVoice=false;
-      btnStartText.textContent="开启播报";btnStartSub.textContent="识别盲道障碍";
-      btnStart.classList.remove('running');setStatus("已停止");
-      setNow("info","已停止","点击重新开启");hideDanger();
-      prevObjMap.clear();
-      return;
-    }
-    btnStart.disabled=true;
-    setStatus("请求摄像头…");setNow("info","正在开启…","");
-    if(!video.srcObject){
-      const stream=await navigator.mediaDevices.getUserMedia({video:{facingMode:"environment"}});
-      video.srcObject=stream;camBox.classList.add('live');
-    }
-    setStatus("加载AI模型…");log("正在加载模型…");
-    if(!model) model=await cocoSsd.load();
-    running=true;isVoice=true;
-    btnStartText.textContent="停止播报";btnStartSub.textContent="点按停止";
-    btnStart.classList.add('running');setStatus("识别中","on");
-    setNow("ok","已就绪","开始识别路况");log("模型加载完成，开始播报","ok");
-    prevObjMap.clear();
-    loop();
-  }catch(e){
-    log("启动异常："+e.message,"danger");
-    alert("启动失败："+e.message+"\n检查摄像头权限，建议使用Chrome浏览器。");
-    setStatus("出错："+e.message);
-    setNow("danger","启动失败","检查摄像头权限");
-  }finally{
-    btnStart.disabled=false;
-  }
-};
+/* ---- B. 通用障碍物检测：虚线框 + 与COCO去重 ---- */
+const generic=analyzeGeneric(vw,vh);
+for(const g of generic){
+// 与COCO识别框去重(IoU>0.3视为同一物体，不重复报)
+let dup=false;
+for(const o of objs){
+if(iou(g,o.bbox)>0.3){dup=true;break;}
+}
+// 绘制(无论是否去重都画框)
+ctx.setLineDash([8,6]);
+ctx.strokeStyle=g.danger?"#ff5a5c":"#2ecc8f";
+ctx.lineWidth=3;ctx.strokeRect(g.x,g.y,g.w,g.h);
+ctx.fillStyle=ctx.strokeStyle;ctx.font="13px sans-serif";
+ctx.fillText("障碍 "+g.dist.toFixed(1)+"m",g.x,g.y-5);
+ctx.setLineDash([]);
+// 播报：正前方(10~2点) 且 8米内 且 未与COCO重复 且 冷却通过
+if(!dup&&g.isFrontArea&&g.dist<GEN_SPEAK_DIST){
+const gkey="g_"+Math.round(g.nx*20)+"_"+Math.round((g.h/vh)*30);
+if(now-(genericTrack.get(gkey)||0)>=COOLDOWN){
+genericTrack.set(gkey,now);
+const clockName=(g.dir===12)?"正前方":(g.dir+"点钟方向");
+const txt=(g.danger?"危险！":"注意：")+`${clockName}，约${g.dist.toFixed(1)}米，有障碍物，请绕行`;
+speak(txt,g.danger);
+log("通用["+txt+"]",g.danger?"danger":"warn");
+}
+}
+}
 
+/* ---- C. 墙面检测：危险优先级最高 ---- */
+const wall=analyzeWall(vw,vh);
+wallResult=wall;
+if(wall){
+// 绘制墙面区域(全尺寸)
+const bx=0,by=wall.top*(vh/sh);
+const bw=vw,bh=(wall.base-wall.top)* (vh/sh);
+ctx.setLineDash([12,8]);
+ctx.strokeStyle="#ff5a5c";ctx.lineWidth=4;ctx.strokeRect(bx,by,bw,bh);
+ctx.fillStyle="#ff5a5c";ctx.font="16px sans-serif";
+ctx.fillText("墙体 ~"+wall.dist.toFixed(1)+"m",bx+10,by+22);
+ctx.setLineDash([]);
+if(wall.dist<WALL_DANGER_DIST&&now-lastWallAlert>WALL_COOLDOWN){
+lastWallAlert=now;
+const wallTxt=`危险！正前方墙体，约${wall.dist.toFixed(1)}米，请停下`;
+speak(wallTxt,true);log(wallTxt,"danger");
+}
+}
+
+/* ---- D. 状态卡 & 危险横幅(优先级:墙>COCO前方>通用前方>侧方>畅通) ---- */
+// 选出正前方最近的通用障碍(用于状态展示)
+let genFront=null;
+for(const g of generic){if(g.isFrontArea&&(!genFront||g.dist<genFront.dist))genFront=g;}
+if(wall&&wall.dist<WALL_DANGER_DIST){
+showDanger(`危险！正前方墙体约${wall.dist.toFixed(1)}米`);
+setNow("danger","正前方墙体 "+wall.dist.toFixed(1)+"米","危险！请停下");
+}else if(top&&top.isFrontArea){
+const dirLabel=(top.dir===12)?"正前方":(top.dir+"点钟");
+const title=dirLabel+" "+top.dist.toFixed(1)+"米 · "+top.cn;
+if(top.danger){setNow("danger",title,"危险！停下绕行");showDanger("危险！"+dirLabel+"有障碍物");}
+else{setNow("warn",title,"注意障碍，放慢速度");hideDanger();}
+}else if(genFront){
+const dirLabel=(genFront.dir===12)?"正前方":(genFront.dir+"点钟");
+const title=dirLabel+" "+genFront.dist.toFixed(1)+"米 · 障碍物";
+if(genFront.danger){setNow("danger",title,"危险！停下绕行");showDanger("危险！"+dirLabel+"有障碍物");}
+else{setNow("warn",title,"注意障碍，放慢速度");hideDanger();}
+}else if(top&&top.danger){
+setNow("danger","侧方危险物 "+top.dist.toFixed(1)+"米","请小心绕行");showDanger("危险！"+top.cn+"障碍物");
+}else{
+setNow("ok","前方畅通","无正前方障碍物，请继续行走");hideDanger();
+}
+
+lastObjects=objs.map(o=>({cn:o.cn,dist:o.dist,dir:o.dir===12?"正前方":o.dir+"点钟方向",danger:o.danger}));
+for(const[k,t]of track.entries()){if(now-t>COOLDOWN*3)track.delete(k);}
+for(const[k,t]of genericTrack.entries()){if(now-t>COOLDOWN*3)genericTrack.delete(k);}
+if(now-lastAiTime>=AI_INTERVAL){lastAiTime=now;if(lastObjects.length)runAi();}
+}catch(err){log("识别出错:"+err.message,"warn")}
+setTimeout(loop,LOOP_DELAY);
+}
+
+/* ============ 交互 ============ */
+btnStart.onclick=async function(){
+try{
+if(!navigator.mediaDevices){
+alert("❌当前环境不支持摄像头！\n请使用Chrome/Edge浏览器，不要微信打开，不要本地直接打开html文件。");
+log("navigator.mediaDevices不存在，环境不支持摄像头","danger");
+return;
+}
+if(!isVoice){
+try{speechSynthesis.cancel();}catch(e){}
+speak("语音已开启，暖阳视界开始播报",true);
+isVoice=true;
+}
+if(running){
+running=false;isVoice=false;
+btnStartText.textContent="开启播报";btnStartSub.textContent="识别盲道障碍";
+btnStart.classList.remove('running');setStatus("已停止");
+setNow("info","已停止","点击重新开启");hideDanger();
+prevObjMap.clear();genericTrack.clear();
+return;
+}
+btnStart.disabled=true;
+setStatus("请求摄像头…");setNow("info","正在开启…","");
+if(!video.srcObject){
+const stream=await navigator.mediaDevices.getUserMedia({video:{facingMode:"environment"}});
+video.srcObject=stream;camBox.classList.add('live');
+}
+setStatus("加载AI模型…");log("正在加载模型…");
+if(!model)model=await cocoSsd.load();
+running=true;isVoice=true;
+btnStartText.textContent="停止播报";btnStartSub.textContent="点按停止";
+btnStart.classList.add('running');setStatus("识别中","on");
+setNow("ok","已就绪","开始识别路况");log("模型加载完成，开始播报","ok");
+prevObjMap.clear();
+loop();
+}catch(e){
+log("启动异常："+e.message,"danger");
+alert("启动失败："+e.message+"\n检查摄像头权限，建议使用Chrome浏览器。");
+setStatus("出错："+e.message);
+setNow("danger","启动失败","检查摄像头权限");
+}finally{
+btnStart.disabled=false;
+}
+};
 let sosPhone=localStorage.getItem("sosPhone")||"";
 const askPhone=()=>{
-  const p=prompt("设置紧急联系人手机号：",sosPhone||"");
-  if(p){
-    sosPhone=p.trim();
-    localStorage.setItem("sosPhone",sosPhone);
-    speak("紧急联系人已设置",true);
-    log("紧急联系人已设置："+sosPhone,"ok");
-    return true;
-  }
-  return false;
+const p=prompt("设置紧急联系人手机号：",sosPhone||"");
+if(p){
+sosPhone=p.trim();
+localStorage.setItem("sosPhone",sosPhone);
+speak("紧急联系人已设置",true);
+log("紧急联系人已设置："+sosPhone,"ok");
+return true;
+}
+return false;
 };
 const sosDial=()=>{
-  if(!sosPhone){
-    if(askPhone()){
-      speak("联系人已设置，再次点击即可拨打",false);
-    }
-    return;
-  }
-  speak("正在拨打紧急联系人",true);
-  log("拨打 "+sosPhone,"danger");
-  window.location.href="tel:"+sosPhone;
+if(!sosPhone){
+if(askPhone()){speak("联系人已设置，再次点击即可拨打",false);}
+return;
+}
+speak("正在拨打紧急联系人",true);
+log("拨打 "+sosPhone,"danger");
+window.location.href="tel:"+sosPhone;
 };
 sosBtn.onclick=sosDial;
-// 长按2秒修改联系人：同时支持触屏和鼠标
 let sosTimer=null;
 const sosPressStart=()=>{sosTimer=setTimeout(()=>{sosTimer=null;askPhone();},2000);};
 const sosPressEnd=()=>{if(sosTimer){clearTimeout(sosTimer);sosTimer=null;}};
@@ -488,14 +630,10 @@ sosBtn.ontouchstart=sosPressStart;
 sosBtn.ontouchend=sosBtn.ontouchmove=sosPressEnd;
 sosBtn.onmousedown=sosPressStart;
 sosBtn.onmouseup=sosBtn.onmouseleave=sosPressEnd;
-
 btnNav.onclick=()=>{speak("打开地图导航",true);window.open("https://uri.amap.com/marker?name=当前位置&src=nuanyangshijie","_blank")};
-
-// 启动提示：未设置联系人时给出提示
 if(!sosPhone){
-  log("提示：长按下方红色按钮可设置紧急联系人","warn");
+log("提示：长按下方红色按钮可设置紧急联系人","warn");
 }
-
 })();
 </script>
 </body>
