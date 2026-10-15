@@ -1,4 +1,3 @@
-<!DOCTYPE html>
 <html lang="zh-CN">
 <head>
 <meta charset="utf-8">
@@ -177,26 +176,26 @@ const DANGER_BOX_RATIO=0.28;    // COCO 物体占屏比危险阈值
 const COOLDOWN=4000;            // 同物体播报冷却(ms)
 const AI_INTERVAL=15000,LOOP_DELAY=800;
 const FRONT_START=10,FRONT_END=2; // 10点~2点方向都算前方播报
-/* ============ 墙面检测(修复版) ============ */
+/* ============ 墙面检测(重做版) ============ */
 const WALL_REF_HEIGHT=2.4;      // 墙面参考高度(米,约一层楼/门高度)
 const WALL_DANGER_DIST=2.5;     // 2.5米内报警
-const WALL_DIFF=30;             // 调高色差阈值，减少暗光误报
-const WALL_MIN_ROWS=8;          // 增加连续行数门槛
-const WALL_STEP=3;
-const WALL_MIN_HEIGHT_RATIO=0.35;// 提高墙面占比阈值
+const WALL_DIFF=26;             // 与地面色差阈值
+const WALL_MIN_ROWS=6;          // 最少连续行数才算墙
+const WALL_STEP=3;              // 纵向扫描步长
+const WALL_MIN_HEIGHT_RATIO=0.3;// 墙面至少占画面30%高度
 const WALL_COOLDOWN=4000;
 let lastWallAlert=0,wallResult=null;
 let wallCanvas=null,wallCtx=null;
 /* ============ 通用障碍物检测 ============ */
-const GEN_DIFF=34;
-const GEN_REF_HEIGHT=0.5;
-const GEN_DANGER_DIST=2.5;
-const GEN_BOX_RATIO=0.22;
-const GEN_SPEAK_DIST=8;
-const GEN_MIN_AREA=10;
+const GEN_DIFF=32;              // 与地面色差阈值
+const GEN_REF_HEIGHT=0.5;       // 通用障碍参考高度(米,路牙/台阶/锥桶等)
+const GEN_DANGER_DIST=2.5;      // 通用障碍危险距离(米)
+const GEN_BOX_RATIO=0.22;       // 通用障碍占屏比危险阈值
+const GEN_SPEAK_DIST=8;         // 通用障碍播报距离上限(米)
+const GEN_MIN_AREA=8;           // 连通块最小像素数(缩略图)
 const GEN_STRIDE_X=3,GEN_STRIDE_Y=2;
 let genCanvas=null,genCtx=null;
-let genericTrack=new Map();
+let genericTrack=new Map();     // 通用障碍播报去重
 let supportTTS=!!window.speechSynthesis;
 let ttsWarmedUp=false;
 let preferredVoice=null;
@@ -224,10 +223,8 @@ const btnNav=document.getElementById('btnNav'),sosBtn=document.getElementById('s
 const nowIcon=document.getElementById('nowIcon'),nowTextT=document.querySelector('#nowText .t'),nowTextS=document.getElementById('nowSub');
 const dangerBanner=document.getElementById('dangerBanner'),dangerText=document.getElementById('dangerText'),logHead=document.getElementById('logHead'),logBody=document.getElementById('logBody');
 let model=null,track=new Map(),isVoice=false,running=false,lastObjects=[],lastAiTime=0;
-let lastTTSWake=0;
+let lastTTSWake=0; // 安卓TTS周期唤醒计时
 let prevObjMap=new Map();
-// 日志行数限制，防止内存堆积
-const MAX_LOG_LINES=80;
 function log(m,cls){
 const d=new Date();
 const t=('0'+d.getHours()).slice(-2)+':'+('0'+d.getMinutes()).slice(-2)+':'+('0'+d.getSeconds()).slice(-2);
@@ -235,10 +232,6 @@ const span=document.createElement('span');
 span.className=cls||'info';
 span.textContent=`[${t}] ${m}\n`;
 logDiv.appendChild(span);
-// 超过最大行数自动删除最早日志
-while(logDiv.children.length>MAX_LOG_LINES){
-logDiv.removeChild(logDiv.firstChild);
-}
 logDiv.scrollTop=logDiv.scrollHeight;
 }
 logHead.onclick=()=>{
@@ -252,6 +245,7 @@ class VQ{
 constructor(){this.q=[];this.p=false;}
 speak(t,urgent){
 if(!supportTTS){log("设备不支持语音播报","warn");return;}
+// ★安卓修复：每次播报前强制 resume，安卓Chrome常卡在暂停态导致无声
 try{speechSynthesis.resume();}catch(e){}
 if(!ttsWarmedUp){
 ttsWarmedUp=true;
@@ -266,6 +260,7 @@ this.p=true;
 const u=new SpeechSynthesisUtterance(this.q.shift());
 u.lang="zh-CN";u.rate=1.12;u.pitch=1.0;
 if(preferredVoice) u.voice=preferredVoice;
+// ★安卓修复：真正发声前再唤醒一次，确保resume生效
 try{speechSynthesis.resume();}catch(e){}
 let done=false;
 const next=()=>{if(done)return;done=true;setTimeout(()=>this.go(),180);};
@@ -291,12 +286,11 @@ return Math.max(0.3,(known*fp)/h);
 }
 function getPixelDist(x1,y1,x2,y2){return Math.hypot(x1-x2,y1-y2);}
 function iou(a,b){
-if(!a||!b) return 0;
 const x1=Math.max(a.x,b.x),y1=Math.max(a.y,b.y),x2=Math.min(a.x+a.w,b.x+b.w),y2=Math.min(a.y+a.h,b.y+b.h);
 const iw=Math.max(0,x2-x1),ih=Math.max(0,y2-y1),i=iw*ih;
 const u=a.w*a.h+b.w*b.h-i;return u?i/u:0;
 }
-/* ============ 墙面检测(修复) ============ */
+/* ============ 墙面检测(重做)：地面色参考+自下而上扫描+距离估算 ============ */
 function analyzeWall(vw,vh){
 if(!video.videoWidth) return null;
 const sw=96,sh=Math.max(32,Math.floor(sw*vh/vw));
@@ -304,14 +298,14 @@ if(!wallCanvas){wallCanvas=document.createElement('canvas');wallCtx=wallCanvas.g
 wallCanvas.width=sw;wallCanvas.height=sh;
 wallCtx.drawImage(video,0,0,sw,sh);
 const img=wallCtx.getImageData(0,0,sw,sh).data;
-// 底部14%地面参考色
+// 1) 取画面底部14%作为"地面参考色"
 const gh=Math.max(4,Math.floor(sh*0.14));
 let r=0,g=0,b=0,n=0;
 for(let y=sh-gh;y<sh;y+=2)for(let x=0;x<sw;x+=3){const i=(y*sw+x)*4;r+=img[i];g+=img[i+1];b+=img[i+2];n++;}
 if(!n)return null;
 r/=n;g/=n;b/=n;
-const brightness=(r+g+b)/3;
-if(brightness<32)return null; // 环境过暗直接跳过墙面检测
+if((r+g+b)/3<26)return null; // 环境过暗不判断
+// 2) 从下往上扫描，找与地面色差持续超过阈值的"墙面段"
 let runY0=-1,runY1=-1,runLen=0,found=false;
 for(let y=sh-1;y>=0;y-=WALL_STEP){
 let rr=0,gg=0,bb=0;
@@ -319,24 +313,25 @@ for(let x=0;x<sw;x+=2){const i=(y*sw+x)*4;rr+=img[i];gg+=img[i+1];bb+=img[i+2];}
 const cnt=Math.ceil(sw/2);rr/=cnt;gg/=cnt;bb/=cnt;
 const d=Math.sqrt((rr-r)*(rr-r)+(gg-g)*(gg-g)+(bb-b)*(bb-b));
 if(d>WALL_DIFF){
-if(runLen===0)runY0=y;
+if(runLen===0)runY0=y;    // 墙面底部(行号大)
 runLen++;
-if(y===0){runY1=0;found=true;break;}
+if(y===0){runY1=0;found=true;break;} // 墙延伸到画面顶部
 }else{
 if(runLen>=WALL_MIN_ROWS){runY1=y+WALL_STEP;found=true;break;}
 runLen=0;runY0=-1;
 }
 }
 if(!found||runLen<WALL_MIN_ROWS)return null;
+// 3) 墙面在画面中的高度占比 → 估算距离
 const wallH=runY0-runY1+WALL_STEP;
 const ratio=wallH/sh;
 if(ratio<WALL_MIN_HEIGHT_RATIO)return null;
 const wallPx=ratio*vh;
 const fp=getFocal(vh);
 const dist=Math.max(0.3,WALL_REF_HEIGHT*fp/wallPx);
-return {dist,ratio,base:runY0,top:runY1};
+return {dist,ratio,base:runY0,top:runY1}; // base>top
 }
-/* ============ 通用障碍物检测 ============ */
+/* ============ 通用障碍物检测：不靠COCO，找画面中"不是地面"的凸起物 ============ */
 function analyzeGeneric(vw,vh){
 const sw=120,sh=Math.max(32,Math.floor(sw*vh/vw));
 if(!genCanvas){genCanvas=document.createElement('canvas');genCtx=genCanvas.getContext('2d',{willReadFrequently:true});}
@@ -344,19 +339,21 @@ genCanvas.width=sw;genCanvas.height=sh;
 genCtx.drawImage(video,0,0,sw,sh);
 const img=genCtx.getImageData(0,0,sw,sh).data;
 const diffMap=new Uint8Array(sw*sh);
+// 1) 逐列：底部16%为该列地面参考，从下往上标出"非地面"像素
 for(let x=0;x<sw;x+=GEN_STRIDE_X){
 const gh=Math.max(2,Math.floor(sh*0.16));
 let r=0,g=0,b=0,cn=0;
 for(let y=sh-gh;y<sh;y+=2){const i=(y*sw+x)*4;r+=img[i];g+=img[i+1];b+=img[i+2];cn++;}
 if(!cn)continue;
 r/=cn;g/=cn;b/=cn;
-if((r+g+b)/3<24)continue;
+if((r+g+b)/3<24)continue; // 该列过暗，跳过(防全黑误报)
 for(let y=sh-1;y>=0;y-=GEN_STRIDE_Y){
 const i=(y*sw+x)*4;
 const d=Math.sqrt((img[i]-r)*(img[i]-r)+(img[i+1]-g)*(img[i+1]-g)+(img[i+2]-b)*(img[i+2]-b));
 if(d>GEN_DIFF)diffMap[y*sw+x]=1;
 }
 }
+// 2) 并查集连通分量
 const parent=new Int32Array(sw*sh).fill(-1);
 function find(a){while(parent[a]!==a){parent[a]=parent[parent[a]];a=parent[a];}return a;}
 for(let y=0;y<sh;y+=GEN_STRIDE_Y){
@@ -373,6 +370,7 @@ const ra=find(idx),rb=find(ni);if(ra!==rb)parent[ra]=rb;
 }
 }
 }
+// 3) 汇总连通块包围盒
 const stats=new Map();
 for(let y=0;y<sh;y+=GEN_STRIDE_Y){
 for(let x=0;x<sw;x+=GEN_STRIDE_X){
@@ -384,6 +382,7 @@ if(x<s.minX)s.minX=x;if(x>s.maxX)s.maxX=x;
 if(y<s.minY)s.minY=y;if(y>s.maxY)s.maxY=y;s.cnt++;
 }
 }
+// 4) 过滤小面积，转成全尺寸框
 const boxes=[];
 const scaleX=vw/sw,scaleY=vh/sh;
 const fp=getFocal(vh);
@@ -391,15 +390,12 @@ for(const s of stats.values()){
 if(s.cnt<GEN_MIN_AREA)continue;
 const w=(s.maxX-s.minX+GEN_STRIDE_X)*scaleX;
 const h=(s.maxY-s.minY+GEN_STRIDE_Y)*scaleY;
-if(h<8||w<8)continue;
+if(h<6||w<6)continue; // 过小
 const x=s.minX*scaleX,y=s.minY*scaleY;
 const cx=x+w/2,cy=y+h/2;
 const dist=Math.max(0.3,GEN_REF_HEIGHT*fp/h);
 const danger=dist<GEN_DANGER_DIST||(h/vh)>GEN_BOX_RATIO;
-const nx=cx/vw;
-const dir=clockDir(nx);
-const isFrontArea=(dir>=FRONT_START||dir<=FRONT_END);
-boxes.push({x,y,w,h,cx,cy,nx,dir,dist,danger,isFrontArea});
+boxes.push({x,y,w,h,cx,cy,nx:cx/vw,dir:clockDir(cx/vw),dist,danger,isFrontArea:(clockDir(cx/vw)>=FRONT_START||clockDir(cx/vw)<=FRONT_END)});
 }
 return boxes;
 }
@@ -451,7 +447,7 @@ const prev=prevObjMap.get(objKey);
 if(prev){
 const d=getPixelDist(cx,cy,prev.cx,prev.cy);
 const relD=d/vw;
-isMovingPerson=relD>0.035; // 提高走动判定阈值，减少误判
+isMovingPerson=relD>0.025;
 }
 }
 ctx.strokeStyle=danger?"#ff4d4f":isFront?"#ff9f2e":"#ffd166";
@@ -483,19 +479,22 @@ log(txt,top.danger?"danger":"warn");
 }
 }
 }
-/* ---- B. 通用障碍物检测：虚线框 + 与COCO去重 IoU>0.35才判定重复（修复去重失效） ---- */
+/* ---- B. 通用障碍物检测：虚线框 + 与COCO去重 ---- */
 const generic=analyzeGeneric(vw,vh);
 for(const g of generic){
+// 与COCO识别框去重(IoU>0.3视为同一物体，不重复报)
 let dup=false;
 for(const o of objs){
-if(iou(g,o.bbox)>0.35){dup=true;break;}
+if(iou(g,o.bbox)>0.3){dup=true;break;}
 }
+// 绘制(无论是否去重都画框)
 ctx.setLineDash([8,6]);
 ctx.strokeStyle=g.danger?"#ff5a5c":"#2ecc8f";
 ctx.lineWidth=3;ctx.strokeRect(g.x,g.y,g.w,g.h);
 ctx.fillStyle=ctx.strokeStyle;ctx.font="13px sans-serif";
 ctx.fillText("障碍 "+g.dist.toFixed(1)+"m",g.x,g.y-5);
 ctx.setLineDash([]);
+// 播报：正前方(10~2点) 且 8米内 且 未与COCO重复 且 冷却通过
 if(!dup&&g.isFrontArea&&g.dist<GEN_SPEAK_DIST){
 const gkey="g_"+Math.round(g.nx*20)+"_"+Math.round((g.h/vh)*30);
 if(now-(genericTrack.get(gkey)||0)>=COOLDOWN){
@@ -511,6 +510,7 @@ log("通用["+txt+"]",g.danger?"danger":"warn");
 const wall=analyzeWall(vw,vh);
 wallResult=wall;
 if(wall){
+// 绘制墙面区域(全尺寸)
 const bx=0,by=wall.top*(vh/sh);
 const bw=vw,bh=(wall.base-wall.top)* (vh/sh);
 ctx.setLineDash([12,8]);
@@ -524,7 +524,8 @@ const wallTxt=`危险！正前方墙体，约${wall.dist.toFixed(1)}米，请停
 speak(wallTxt,true);log(wallTxt,"danger");
 }
 }
-/* ---- D. 状态卡 & 危险横幅 ---- */
+/* ---- D. 状态卡 & 危险横幅(优先级:墙>COCO前方>通用前方>侧方>畅通) ---- */
+// 选出正前方最近的通用障碍(用于状态展示)
 let genFront=null;
 for(const g of generic){if(g.isFrontArea&&(!genFront||g.dist<genFront.dist))genFront=g;}
 if(wall&&wall.dist<WALL_DANGER_DIST){
@@ -546,25 +547,14 @@ setNow("danger","侧方危险物 "+top.dist.toFixed(1)+"米","请小心绕行");
 setNow("ok","前方畅通","无正前方障碍物，请继续行走");hideDanger();
 }
 lastObjects=objs.map(o=>({cn:o.cn,dist:o.dist,dir:o.dir===12?"正前方":o.dir+"点钟方向",danger:o.danger}));
-// 清理过期track缓存
 for(const[k,t]of track.entries()){if(now-t>COOLDOWN*3)track.delete(k);}
 for(const[k,t]of genericTrack.entries()){if(now-t>COOLDOWN*3)genericTrack.delete(k);}
 if(now-lastAiTime>=AI_INTERVAL){lastAiTime=now;if(lastObjects.length)runAi();}
 }catch(err){log("识别出错:"+err.message,"warn")}
-// TTS唤醒，修复后台切回静音
-if(window.speechSynthesis&&Date.now()-lastTTSWake>2500){
-lastTTSWake=Date.now();
-try{speechSynthesis.resume();}catch(e){}
-}
+// ★安卓修复：每3秒强制唤醒TTS，防止识别循环长时间运行后静音
+if(window.speechSynthesis&&Date.now()-lastTTSWake>3000){lastTTSWake=Date.now();try{speechSynthesis.resume();}catch(e){}}
 setTimeout(loop,LOOP_DELAY);
 }
-// 页面可见性监听：切后台回来重置TTS
-document.addEventListener('visibilitychange',()=>{
-if(!document.hidden && running){
-try{speechSynthesis.resume();}catch(e){}
-log("页面恢复可见，重置语音","warn");
-}
-})
 /* ============ 交互 ============ */
 btnStart.onclick=async function(){
 try{
@@ -639,7 +629,7 @@ sosBtn.ontouchend=sosBtn.ontouchmove=sosPressEnd;
 sosBtn.onmousedown=sosPressStart;
 sosBtn.onmouseup=sosBtn.onmouseleave=sosPressEnd;
 btnNav.onclick=()=>{speak("打开地图导航",true);window.open("https://uri.amap.com/marker?name=当前位置&src=nuanyangshijie","_blank")};
-/* ============ 触屏快捷控制 ============ */
+/* ============ 触屏快捷控制：双击=暂停/继续，上滑=导航，下滑=紧急呼叫 ============ */
 const toastEl=document.getElementById('toast');
 let toastTimer=null;
 function toast(msg,pause){
@@ -653,4 +643,55 @@ function openNav(){
 toast("已打开导航");
 window.open("https://uri.amap.com/marker?name=当前位置&src=nuanyangshijie","_blank");
 }
-const SWIPE_MIN=60
+/* 滑动识别 */
+const SWIPE_MIN=60; // 滑动位移阈值(px)
+let tsY=0,tsX=0,swiping=false,suppressTap=false;
+camBox.addEventListener('touchstart',e=>{
+const t=e.touches[0];tsY=t.clientY;tsX=t.clientX;swiping=false;suppressTap=false;
+},{passive:true});
+camBox.addEventListener('touchmove',e=>{
+const t=e.touches[0];
+if(Math.abs(t.clientY-tsY)>SWIPE_MIN||Math.abs(t.clientX-tsX)>SWIPE_MIN){swiping=true;e.preventDefault();}
+},{passive:false});
+camBox.addEventListener('touchend',e=>{
+if(swiping){
+suppressTap=true;
+const dy=e.changedTouches[0].clientY-tsY;
+if(dy<-SWIPE_MIN){openNav();}                 // 上滑=导航
+else if(dy>SWIPE_MIN){toast("正在呼叫紧急联系人");sosDial();} // 下滑=紧急呼叫
+}
+},{passive:true});
+/* 双击=暂停/继续(滑动后忽略本次click，避免误触) */
+let taps=0,tapTimer=null;
+camBox.addEventListener('click',()=>{
+if(suppressTap){suppressTap=false;taps=0;clearTimeout(tapTimer);return;}
+taps++;
+clearTimeout(tapTimer);
+tapTimer=setTimeout(()=>{
+if(taps===2){toast(running?"已暂停播报":"已继续播报",running);btnStart.click();}
+taps=0;
+},300);
+});
+// 测试声音按钮：安卓首次语音必须由用户手势触发，点这里最稳
+const btnTest=document.getElementById('btnTest');
+// TTS诊断：输出当前浏览器/引擎/语音情况，方便定位没声音的原因
+function ttsDiag(){
+if(!window.speechSynthesis)return"不支持：浏览器没有speechSynthesis";
+const v=speechSynthesis.getVoices()||[];
+const zh=v.filter(x=>x.lang&&x.lang.toLowerCase().startsWith('zh'));
+return"支持TTS | 总语音数:"+v.length+" | 中文语音数:"+zh.length+" | 引擎:"+(preferredVoice?preferredVoice.name:"未匹配")+" | 中文语音:"+(zh.length?zh.map(x=>x.name).join("、"):"无");
+}
+btnTest.onclick=()=>{
+if(!supportTTS){alert("此浏览器不支持语音播报(speechSynthesis)，请换Chrome/Edge");return;}
+log("TTS诊断："+ttsDiag(),"warn");
+try{speechSynthesis.cancel();speechSynthesis.resume();}catch(e){}
+speak("你好，我是暖阳视界。如果你能听到这句话，说明语音播报正常。",true);
+log("已播放测试语音，如无声音请检查媒体音量","warn");
+};
+if(!sosPhone){
+log("提示：长按下方红色按钮可设置紧急联系人","warn");
+}
+})();
+</script>
+</body>
+</html>
