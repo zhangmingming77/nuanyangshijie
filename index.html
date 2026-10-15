@@ -51,7 +51,10 @@ font-size:16px;font-weight:800;box-shadow:var(--shadow-soft)}
 #dangerBanner .icon{width:30px;height:30px;color:var(--danger);animation:blink 1s infinite}
 @keyframes dangerIn{from{opacity:0;transform:translateY(-6px)}to{opacity:1}}
 @keyframes blink{0%,100%{opacity:1}50%{opacity:.4}}
-#camBox{position:relative;border-radius:var(--radius);overflow:hidden;background:#000;border:1px solid var(--line);box-shadow:var(--shadow)}
+#camBox{position:relative;border-radius:var(--radius);overflow:hidden;background:#000;border:1px solid var(--line);box-shadow:var(--shadow);touch-action:none}
+#toast{position:fixed;left:50%;bottom:150px;transform:translateX(-50%);background:rgba(10,14,20,0.9);border:1px solid var(--line-strong);color:var(--txt);padding:10px 22px;border-radius:999px;font-size:14px;font-weight:700;opacity:0;pointer-events:none;transition:opacity .2s;z-index:99;white-space:nowrap}
+#toast.show{opacity:1}
+#toast.pause{color:#ffd8a8;border-color:rgba(255,159,46,0.4)}
 video{width:100%;display:block;aspect-ratio:4/3;object-fit:cover;background:#000}
 canvas{position:absolute;inset:0;width:100%;height:100%;pointer-events:none}
 #camPlaceholder{position:absolute;inset:0;display:grid;place-items:center;text-align:center;color:var(--txt-2);padding:24px;gap:10px}
@@ -99,6 +102,10 @@ border-radius:0 0 16px 16px;color:#c7d2e0;white-space:pre-wrap}
 #log .danger{color:#ff8f90}#log .warn{color:#ffb066}#log .ok{color:#7fe3bd}
 .legend{display:flex;gap:14px;flex-wrap:wrap;font-size:11px;color:var(--txt-2);padding:0 2px}
 .legend i{display:inline-block;width:20px;height:0;border-top-width:2px;border-top-style:solid;vertical-align:middle;margin-right:6px}
+.log-actions{display:inline-flex;align-items:center;gap:10px}
+#btnTest{border:1px solid rgba(255,159,46,0.35);background:rgba(255,159,46,0.1);color:#ffd8a8;font-size:12px;font-weight:700;
+padding:4px 12px;border-radius:999px;cursor:pointer}
+#btnTest:active{transform:scale(.95)}
 @media (min-width:768px){.wrap{padding:24px}video{aspect-ratio:16/9}}
 </style>
 </head>
@@ -129,7 +136,7 @@ border-radius:0 0 16px 16px;color:#c7d2e0;white-space:pre-wrap}
 <div id="nowText"><div class="t">等待开启</div><div class="s" id="nowSub">开启后实时播报前方路况</div></div>
 </div>
 <div id="aiTip" aria-live="polite">
-<span id="aiTipText">AI安全解说：前方障碍自动播报，走动行人不播报。</span>
+<span id="aiTipText">AI安全解说：前方障碍自动播报，走动行人不播报。双击暂停/继续，画面上滑导航，下滑紧急呼叫。</span>
 </div>
 <div class="controls">
 <button id="btnStart" class="btn btn-primary">
@@ -141,12 +148,13 @@ border-radius:0 0 16px 16px;color:#c7d2e0;white-space:pre-wrap}
 <span>一键导航</span><span class="sub">打开高德地图</span>
 </button>
 </div>
-<div id="logHead" role="button" tabindex="0" aria-expanded="false"><b>运行日志</b><svg class="chev" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m6 9 6 6 6-6"/></svg></div>
+<div id="logHead" role="button" tabindex="0" aria-expanded="false"><b>运行日志</b><span class="log-actions"><button id="btnTest" type="button">测试声音</button><svg class="chev" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m6 9 6 6 6-6"/></svg></span></div>
 <div id="logBody"><div id="log">— 暖阳视界已就绪，点击开启播报 —</div></div>
 <div id="sosWrap">
 <button id="sosBtn"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 16.9v3a2 2 0 0 1-2.2 2 19.8 19.8 0 0 1-8.6-3 19.5 19.5 0 0 1-6-6 19.8 19.8 0 0 1-3-8.7A2 2 0 0 1 4.1 2h3a2 2 0 0 1 2 1.7c.1 1 .4 2 .7 2.9a2 2 0 0 1-.5 2.1L8.1 9.9a16 16 0 0 0 6 6l1.2-1.2a2 2 0 0 1 2.1-.5c.9.3 1.9.6 2.9.7a2 2 0 0 1 1.7 2z"/></svg>紧急呼叫亲人</button>
-<div id="sosHint">点击拨打 · 长按2秒修改联系人</div>
+<div id="sosHint">点击拨打 · 长按改联系人 · 画面上滑导航 · 下滑紧急呼叫</div>
 </div>
+<div id="toast"></div>
 </div>
 <script>
 (function(){
@@ -220,6 +228,7 @@ const btnNav=document.getElementById('btnNav'),sosBtn=document.getElementById('s
 const nowIcon=document.getElementById('nowIcon'),nowTextT=document.querySelector('#nowText .t'),nowTextS=document.getElementById('nowSub');
 const dangerBanner=document.getElementById('dangerBanner'),dangerText=document.getElementById('dangerText'),logHead=document.getElementById('logHead'),logBody=document.getElementById('logBody');
 let model=null,track=new Map(),isVoice=false,running=false,lastObjects=[],lastAiTime=0;
+let lastTTSWake=0; // 安卓TTS周期唤醒计时
 let prevObjMap=new Map();
 function log(m,cls){
 const d=new Date();
@@ -242,6 +251,8 @@ class VQ{
 constructor(){this.q=[];this.p=false;}
 speak(t,urgent){
 if(!supportTTS){log("设备不支持语音播报","warn");return;}
+// ★安卓修复：每次播报前强制 resume，安卓Chrome常卡在暂停态导致无声
+try{speechSynthesis.resume();}catch(e){}
 if(!ttsWarmedUp){
 ttsWarmedUp=true;
 try{const warm=new SpeechSynthesisUtterance(" ");warm.volume=0;warm.rate=2;speechSynthesis.speak(warm);}catch(e){}
@@ -255,6 +266,8 @@ this.p=true;
 const u=new SpeechSynthesisUtterance(this.q.shift());
 u.lang="zh-CN";u.rate=1.12;u.pitch=1.0;
 if(preferredVoice) u.voice=preferredVoice;
+// ★安卓修复：真正发声前再唤醒一次，确保resume生效
+try{speechSynthesis.resume();}catch(e){}
 let done=false;
 const next=()=>{if(done)return;done=true;setTimeout(()=>this.go(),180);};
 u.onend=()=>next();
@@ -554,6 +567,8 @@ for(const[k,t]of track.entries()){if(now-t>COOLDOWN*3)track.delete(k);}
 for(const[k,t]of genericTrack.entries()){if(now-t>COOLDOWN*3)genericTrack.delete(k);}
 if(now-lastAiTime>=AI_INTERVAL){lastAiTime=now;if(lastObjects.length)runAi();}
 }catch(err){log("识别出错:"+err.message,"warn")}
+// ★安卓修复：每3秒强制唤醒TTS，防止识别循环长时间运行后静音
+if(window.speechSynthesis&&Date.now()-lastTTSWake>3000){lastTTSWake=Date.now();try{speechSynthesis.resume();}catch(e){}}
 setTimeout(loop,LOOP_DELAY);
 }
 
@@ -631,6 +646,66 @@ sosBtn.ontouchend=sosBtn.ontouchmove=sosPressEnd;
 sosBtn.onmousedown=sosPressStart;
 sosBtn.onmouseup=sosBtn.onmouseleave=sosPressEnd;
 btnNav.onclick=()=>{speak("打开地图导航",true);window.open("https://uri.amap.com/marker?name=当前位置&src=nuanyangshijie","_blank")};
+
+/* ============ 触屏快捷控制：双击=暂停/继续，上滑=导航，下滑=紧急呼叫 ============ */
+const toastEl=document.getElementById('toast');
+let toastTimer=null;
+function toast(msg,pause){
+toastEl.textContent=msg;
+toastEl.classList.toggle('pause',!!pause);
+toastEl.classList.add('show');
+clearTimeout(toastTimer);
+toastTimer=setTimeout(()=>toastEl.classList.remove('show'),1500);
+}
+function openNav(){
+toast("已打开导航");
+window.open("https://uri.amap.com/marker?name=当前位置&src=nuanyangshijie","_blank");
+}
+/* 滑动识别 */
+const SWIPE_MIN=60; // 滑动位移阈值(px)
+let tsY=0,tsX=0,swiping=false,suppressTap=false;
+camBox.addEventListener('touchstart',e=>{
+const t=e.touches[0];tsY=t.clientY;tsX=t.clientX;swiping=false;suppressTap=false;
+},{passive:true});
+camBox.addEventListener('touchmove',e=>{
+const t=e.touches[0];
+if(Math.abs(t.clientY-tsY)>SWIPE_MIN||Math.abs(t.clientX-tsX)>SWIPE_MIN){swiping=true;e.preventDefault();}
+},{passive:false});
+camBox.addEventListener('touchend',e=>{
+if(swiping){
+suppressTap=true;
+const dy=e.changedTouches[0].clientY-tsY;
+if(dy<-SWIPE_MIN){openNav();}                 // 上滑=导航
+else if(dy>SWIPE_MIN){toast("正在呼叫紧急联系人");sosDial();} // 下滑=紧急呼叫
+}
+},{passive:true});
+/* 双击=暂停/继续(滑动后忽略本次click，避免误触) */
+let taps=0,tapTimer=null;
+camBox.addEventListener('click',()=>{
+if(suppressTap){suppressTap=false;taps=0;clearTimeout(tapTimer);return;}
+taps++;
+clearTimeout(tapTimer);
+tapTimer=setTimeout(()=>{
+if(taps===2){toast(running?"已暂停播报":"已继续播报",running);btnStart.click();}
+taps=0;
+},300);
+});
+// 测试声音按钮：安卓首次语音必须由用户手势触发，点这里最稳
+const btnTest=document.getElementById('btnTest');
+// TTS诊断：输出当前浏览器/引擎/语音情况，方便定位没声音的原因
+function ttsDiag(){
+if(!window.speechSynthesis)return"不支持：浏览器没有speechSynthesis";
+const v=speechSynthesis.getVoices()||[];
+const zh=v.filter(x=>x.lang&&x.lang.toLowerCase().startsWith('zh'));
+return"支持TTS | 总语音数:"+v.length+" | 中文语音数:"+zh.length+" | 引擎:"+(preferredVoice?preferredVoice.name:"未匹配")+" | 中文语音:"+(zh.length?zh.map(x=>x.name).join("、"):"无");
+}
+btnTest.onclick=()=>{
+if(!supportTTS){alert("此浏览器不支持语音播报(speechSynthesis)，请换Chrome/Edge");return;}
+log("TTS诊断："+ttsDiag(),"warn");
+try{speechSynthesis.cancel();speechSynthesis.resume();}catch(e){}
+speak("你好，我是暖阳视界。如果你能听到这句话，说明语音播报正常。",true);
+log("已播放测试语音，如无声音请检查媒体音量","warn");
+};
 if(!sosPhone){
 log("提示：长按下方红色按钮可设置紧急联系人","warn");
 }
