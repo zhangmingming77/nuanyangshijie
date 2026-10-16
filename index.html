@@ -174,12 +174,16 @@ const TRACK_CONFIRM_MIN=3;      // 新障碍连续稳定出现 3 帧才绘制/�
 const TRACK_LOST_TIMEOUT=700;   // 障碍短暂丢失仍保留框(ms)，避免框闪断
 const TRACK_SMOOTH=0.55;        // 框位置平滑系数(越大越稳、越滞后)
 const TRACK_IOU_MATCH=0.3;      // 跨帧匹配 IoU 阈值(高→只匹配同一个障碍)
-const FRONT_START=10,FRONT_END=2;
+/* 【扇形收窄】改为十二点钟方向窄扇形（11点~1点）：只播报正前方障碍，减少侧方误报 */
+const FRONT_START=11,FRONT_END=1;
 /* ============================================================
    背景建模 + 帧间运动检测
    ============================================================ */
 const BLOCK=10;
 const BG_DIFF_THRESHOLD=32;     // 【调高】原26→32，降低背景噪声误判
+/* 【新增】色度差阈值：过滤阴影。阴影只是把画面整体压暗（红蓝通道相对背景几乎不变），
+   色度差很小；只有"亮度差 + 色度差"同时超过阈值才判为障碍，影子不再误报 */
+const SHADOW_CHROMA_THRESHOLD=18;
 const GEN_MIN_AREA_BLOCKS=10;   // 【调高】原6→10，滤掉更多孤立噪点框
 const GEN_MIN_W_BLOCKS=2;
 const GEN_MIN_H_BLOCKS=2;
@@ -323,25 +327,44 @@ function analyzeGeneric(vw,vh){
  genCtx.drawImage(video,0,0,gw,gh);
  const img=genCtx.getImageData(0,0,gw,gh).data;
  const N=gw*gh;
- const cur=new Float32Array(N);
+ /* 【阴影过滤】背景建模存 RGB 三通道；前景判定要求"亮度差+色度差"同时超标。
+    阴影只会把画面同向压暗（红蓝通道相对背景几乎不变，色度差≈0），故被滤除，不播报 */
+ const raw=new Float32Array(N*3);
+ const lum=new Float32Array(N);
  for(let i=0;i<N;i++){
   const r=img[i*4],g=img[i*4+1],b=img[i*4+2];
-  cur[i]=0.299*r+0.587*g+0.114*b;
+  raw[i*3]=r;raw[i*3+1]=g;raw[i*3+2]=b;
+  lum[i]=0.299*r+0.587*g+0.114*b;
  }
- if(!bgModel||bgModel.length!==N){bgModel=new Float32Array(cur);return [];}
+ if(!bgModel||bgModel.length!==N*3){bgModel=new Float32Array(raw);return [];}
  const diff=new Uint8Array(N);
  let change=0;
  for(let i=0;i<N;i++){
-  if(Math.abs(cur[i]-bgModel[i])>BG_DIFF_THRESHOLD){diff[i]=1;change++;}
+  const r=raw[i*3],b=raw[i*3+2];
+  const bgr=bgModel[i*3],bgb=bgModel[i*3+2];
+  const bdiff=Math.abs(lum[i]-(0.299*bgModel[i*3]+0.587*bgModel[i*3+1]+0.114*bgb));
+  const cdiff=Math.abs(r-bgr)+Math.abs(b-bgb);   // 红蓝通道色度差：阴影≈0
+  if(bdiff>BG_DIFF_THRESHOLD && cdiff>SHADOW_CHROMA_THRESHOLD){diff[i]=1;change++;}
  }
  const moveRatio=change/N;
  const rate = moveRatio<0.04 ? BG_ABSORB_RATE : 0;
  if(rate>0){
   let didAbsorb=false;
   for(let i=0;i<N;i++){
-   if(!diff[i]){bgModel[i]=bgModel[i]*(1-rate)+cur[i]*rate;didAbsorb=true;}
+   if(!diff[i]){
+    bgModel[i*3]=bgModel[i*3]*(1-rate)+raw[i*3]*rate;
+    bgModel[i*3+1]=bgModel[i*3+1]*(1-rate)+raw[i*3+1]*rate;
+    bgModel[i*3+2]=bgModel[i*3+2]*(1-rate)+raw[i*3+2]*rate;
+    didAbsorb=true;
+   }
   }
-  if(moveRatio<0.008&&!didAbsorb){for(let i=0;i<N;i++)bgModel[i]=bgModel[i]*(1-rate)+cur[i]*rate;}
+  if(moveRatio<0.008&&!didAbsorb){
+   for(let i=0;i<N;i++){
+    bgModel[i*3]=bgModel[i*3]*(1-rate)+raw[i*3]*rate;
+    bgModel[i*3+1]=bgModel[i*3+1]*(1-rate)+raw[i*3+1]*rate;
+    bgModel[i*3+2]=bgModel[i*3+2]*(1-rate)+raw[i*3+2]*rate;
+   }
+  }
  }
  if(change<GEN_MIN_AREA_BLOCKS)return [];
  const seen=new Uint8Array(N);
@@ -501,20 +524,16 @@ async function loop(){
   }
   /* 3) 清理长时间丢失的跟踪 */
   trackers=trackers.filter(tr=>(now-tr.lastSeen)<TRACK_LOST_TIMEOUT);
-  /* 4) 只绘制/播报"确认过"的稳定框，位置用平滑后的值锁定 */
+  /* 4) 只收集确认过的稳定障碍（暂不绘制，统一到最后只画最重要的一个） */
   for(const tr of trackers){
-   if(tr.seen<TRACK_CONFIRM_MIN)continue;   // 未确认的噪点框不显示、不播报
+   if(tr.seen<TRACK_CONFIRM_MIN)continue;
    const x=tr.x,y=tr.y,w=tr.w,h=tr.h;
    const dist=getDist(tr.cls,h,vh);
    const danger=dist<DANGER||(h/vh)>DANGER_BOX_RATIO;
    const dir=clockDir(tr.cx/vw);
    const isFrontArea=(dir>=FRONT_START||dir<=FRONT_END);
-   const objKey="tr"+tr.id;   // 用稳定ID，同一障碍不会反复换名
-   ctx.strokeStyle=danger?"#ff4d4f":"#ffd166";
-   ctx.lineWidth=3;ctx.strokeRect(x,y,w,h);
-   ctx.fillStyle=ctx.strokeStyle;ctx.font="15px sans-serif";
-   ctx.fillText(tr.cn+" "+dist.toFixed(1)+"m",x,y-6);
-   objs.push({cn:tr.cn,dist,dir,isFrontArea,danger,nx:tr.cx/vw,cls:tr.cls,objKey,bbox:{x,y,w,h}});
+   const objKey="tr"+tr.id;
+   objs.push({cn:tr.cn,dist,dir,isFrontArea,danger,nx:tr.cx/vw,cls:tr.cls,objKey,bbox:{x,y,w,h},type:"coco"});
   }
   objs.sort((a,b)=>{ if(a.danger!==b.danger)return a.danger?-1:1; if(a.isFrontArea!==b.isFrontArea)return a.isFrontArea?-1:1; return a.dist-b.dist; });
   const top=objs[0];
@@ -546,32 +565,19 @@ async function loop(){
   genTracks=genTracks.filter(gt=>(now-gt.lastSeen)<TRACK_LOST_TIMEOUT);
   const generic=[];
   for(const gt of genTracks){
-   if(gt.seen<TRACK_CONFIRM_MIN)continue;   // 未确认的噪点框不显示、不播报
+   if(gt.seen<TRACK_CONFIRM_MIN)continue;
    const g={x:gt.x,y:gt.y,w:gt.w,h:gt.h,cx:gt.cx,cy:gt.cy,nx:gt.cx/vw,dir:clockDir(gt.cx/vw),
      dist:gt.dist,danger:gt.danger,isFrontArea:(clockDir(gt.cx/vw)>=FRONT_START||clockDir(gt.cx/vw)<=FRONT_END)};
    let dup=false;
    for(const o of objs){ if(iou(g,o.bbox)>0.3){dup=true;break;} }
-   if(!dup){
-    ctx.setLineDash([8,6]);
-    ctx.strokeStyle=g.danger?"#ff5a5c":"#2ecc8f";
-    ctx.lineWidth=3;ctx.strokeRect(g.x,g.y,g.w,g.h);
-    ctx.fillStyle=ctx.strokeStyle;ctx.font="13px sans-serif";
-    ctx.fillText("障碍 "+g.dist.toFixed(1)+"m",g.x,g.y-5);
-    ctx.setLineDash([]);
-   }
-   generic.push(g);
+   if(!dup){ generic.push({...g,type:"generic"}); }
   }
-  /* ---- C. 统一选出 1 个最高优先级候选播报 ---- */
+  /* ---- C. 墙体检测（暂不绘制，统一到最后只画最重要的一个） ---- */
   const candidates=[];
   const wall=analyzeWall(vw,vh);
   if(wall){
-   const by=wall.top*(vh/(Math.max(32,Math.floor(96*vh/vw))));
-   const bh=(wall.base-wall.top)*(vh/(Math.max(32,Math.floor(96*vh/vw))));
-   ctx.setLineDash([12,8]);ctx.strokeStyle="#ff5a5c";ctx.lineWidth=4;
-   ctx.strokeRect(0,by,vw,bh);
-   ctx.fillStyle="#ff5a5c";ctx.font="16px sans-serif";
-   ctx.fillText("墙体 ~"+wall.dist.toFixed(1)+"m",12,by+22);
-   ctx.setLineDash([]);
+   wall.by=wall.top*(vh/(Math.max(32,Math.floor(96*vh/vw))));
+   wall.bh=(wall.base-wall.top)*(vh/(Math.max(32,Math.floor(96*vh/vw))));
    if(wall.dist<WALL_DANGER_DIST){
     const wkey="wall_"+Math.round(wall.dist*2);
     if(confirm(wkey)){
@@ -584,7 +590,7 @@ async function loop(){
   if(top&&top.isFrontArea&&top.dist<SPEAK_DIST){
    const okey="c_"+top.objKey;
    if(confirm(okey)){
-    const clockName=(top.dir===12)?"正前方":(top.dir+"点钟方向");
+    const clockName=(top.dir===12)?"十二点钟方向":(top.dir+"点钟方向");
     const prefix=top.danger?"危险！":"注意：";
     const txt=prefix+clockName+"，"+top.dist.toFixed(1)+"米，有障碍物，请绕行";
     candidates.push({type:"coco",dist:top.dist,danger:top.danger,speakText:txt,key:okey});
@@ -595,7 +601,7 @@ async function loop(){
   if(genFront&&genFront.dist<GEN_SPEAK_DIST){
    const gkey="g_"+Math.round(genFront.nx*12)+"_"+Math.round((genFront.h/vh)*18);
    if(confirm(gkey)){
-    const clockName=(genFront.dir===12)?"正前方":(genFront.dir+"点钟方向");
+    const clockName=(genFront.dir===12)?"十二点钟方向":(genFront.dir+"点钟方向");
     const txt=(genFront.danger?"危险！":"注意：")+clockName+"，约"+genFront.dist.toFixed(1)+"米，有障碍物，请绕行";
     candidates.push({type:"generic",dist:genFront.dist,danger:genFront.danger,speakText:txt,key:gkey});
    }
@@ -609,17 +615,41 @@ async function loop(){
     log(best.speakText,best.danger?"danger":"warn");
    }
   }
+  /* ---- 【新增】画面只保留一个框：只画最高优先级那个障碍，不再满屏框 ---- */
+  let showT=best?best:(top?{type:"coco"}:null);
+  if(showT){
+   if(showT.type==="wall"&&wall){
+    ctx.setLineDash([12,8]);ctx.strokeStyle="#ff5a5c";ctx.lineWidth=4;
+    ctx.strokeRect(0,wall.by,vw,wall.bh);
+    ctx.fillStyle="#ff5a5c";ctx.font="16px sans-serif";
+    ctx.fillText("墙体 ~"+wall.dist.toFixed(1)+"m",12,wall.by+22);
+    ctx.setLineDash([]);
+   }else if(showT.type==="coco"&&top){
+    const b=top.bbox;
+    ctx.strokeStyle=top.danger?"#ff4d4f":"#ffd166";
+    ctx.lineWidth=3;ctx.strokeRect(b.x,b.y,b.w,b.h);
+    ctx.fillStyle=ctx.strokeStyle;ctx.font="15px sans-serif";
+    ctx.fillText(top.cn+" "+top.dist.toFixed(1)+"m",b.x,b.y-6);
+   }else if(showT.type==="generic"&&genFront){
+    ctx.setLineDash([8,6]);
+    ctx.strokeStyle=genFront.danger?"#ff5a5c":"#2ecc8f";
+    ctx.lineWidth=3;ctx.strokeRect(genFront.x,genFront.y,genFront.w,genFront.h);
+    ctx.fillStyle=ctx.strokeStyle;ctx.font="13px sans-serif";
+    ctx.fillText("障碍 "+genFront.dist.toFixed(1)+"m",genFront.x,genFront.y-5);
+    ctx.setLineDash([]);
+   }
+  }
   /* ---- D. 状态卡片 / 危险横幅 ---- */
   if(wall&&wall.dist<WALL_DANGER_DIST){
    showDanger("危险！正前方墙体约"+wall.dist.toFixed(1)+"米");
    setNow("danger","正前方墙体 "+wall.dist.toFixed(1)+"米","危险！请停下");
   }else if(top&&top.isFrontArea){
-   const dirLabel=(top.dir===12)?"正前方":(top.dir+"点钟");
+   const dirLabel=(top.dir===12)?"十二点钟方向":(top.dir+"点钟");
    const t=dirLabel+" "+top.dist.toFixed(1)+"米 · "+top.cn;
    if(top.danger){setNow("danger",t,"危险！停下绕行");showDanger("危险！"+dirLabel+"有障碍物");}
    else{setNow("warn",t,"注意障碍，放慢速度");hideDanger();}
   }else if(genFront){
-   const dirLabel=(genFront.dir===12)?"正前方":(genFront.dir+"点钟");
+   const dirLabel=(genFront.dir===12)?"十二点钟方向":(genFront.dir+"点钟");
    const t=dirLabel+" "+genFront.dist.toFixed(1)+"米 · 障碍物";
    if(genFront.danger){setNow("danger",t,"危险！停下绕行");showDanger("危险！"+dirLabel+"有障碍物");}
    else{setNow("warn",t,"注意障碍，放慢速度");hideDanger();}
