@@ -118,9 +118,7 @@ canvas{position:absolute;inset:0;width:100%;height:100%;pointer-events:none}
     </div>
     <div class="status-dot" id="statusDot"><span class="dot"></span><span id="statusText">待开启</span></div>
   </header>
-
   <div id="dangerBanner"><span class="icon">⚠️</span><span id="dangerText">危险！</span></div>
-
   <div id="camBox">
     <video id="video" autoplay playsinline muted></video>
     <canvas id="canvas"></canvas>
@@ -128,82 +126,63 @@ canvas{position:absolute;inset:0;width:100%;height:100%;pointer-events:none}
       <div>
         <b>摄像头待开启</b>
         <span style="display:block">点击下方「开启播报」开始识别路况</span>
-        <span style="display:block">COCO识别 · 通用障碍 · 危险</span>
+        <span style="display:block">只识别重要障碍 · 行人车辆</span>
       </div>
     </div>
   </div>
-
   <div id="nowCard">
     <div id="nowIcon">🔍</div>
     <div id="nowText"><div class="t" id="nowTitle">等待开启</div><div class="s" id="nowSub">开启后实时播报前方路况</div></div>
   </div>
-
-  <div id="aiTip">AI安全解说：只播报最危险障碍，减少语音打扰。双击暂停/继续，画面上滑导航，下滑紧急呼叫。</div>
-
+  <div id="aiTip">AI安全解说：只播报近处重要障碍，减少语音打扰。双击暂停/继续，画面上滑导航，下滑紧急呼叫。</div>
   <div class="controls">
-    <button class="btn btn-primary" id="btnStart"><span id="btnStartText">开启播报</span><span id="btnStartSub" class="sub">识别盲道障碍</span></button>
+    <button class="btn btn-primary" id="btnStart"><span id="btnStartText">开启播报</span><span id="btnStartSub" class="sub">识别重要障碍</span></button>
     <button class="btn btn-nav" id="btnNav"><span>一键导航</span><span class="sub">打开高德地图</span></button>
   </div>
-
   <div id="sosWrap">
     <button id="sosBtn">📞 紧急呼叫亲人</button>
     <p id="sosHint">点击拨打 · 长按改联系人 · 画面上滑导航 · 下滑紧急呼叫</p>
   </div>
-
   <div>
     <div id="logHead" role="button" tabindex="0" aria-expanded="false"><b>运行日志</b><span class="log-actions"><button id="btnTest">🔊 测试声音</button><span class="chev">▾</span></span></div>
     <div id="logBody"><div id="log">— 暖阳视界已就绪，点击开启播报 —</div></div>
     <div class="legend"><span><i style="border-top-color:#ff4d4f"></i>危险</span><span><i style="border-top-color:#ffce54"></i>注意</span><span><i style="border-top-color:#2ecc8f"></i>安全</span></div>
   </div>
 </div>
-
 <div id="toast"></div>
-
 <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs"></script>
 <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/coco-ssd"></script>
 <script>
 (function(){
 "use strict";
-
 /* ============================================================
    常量
    ============================================================ */
-const targetClasses=["person","bicycle","car","motorcycle","bus","truck","fire hydrant","traffic light","stop sign","bench","potted plant","dog","cat","backpack"];
-const CLASS_CN={ person:"行人",bicycle:"自行车",car:"汽车",motorcycle:"摩托车",bus:"公交车",truck:"卡车",
- "fire hydrant":"消防栓","traffic light":"红绿灯","stop sign":"停车标志",bench:"长椅",
- "potted plant":"盆栽",dog:"狗",cat:"猫",backpack:"背包" };
-const KNOWN={ person:1.65,bicycle:1.1,car:1.6,motorcycle:1.2,bus:3.5,truck:3.5,"fire hydrant":0.8,
- "traffic light":2.8,"stop sign":0.9,bench:0.9,"potted plant":0.8,dog:0.55,cat:0.35,backpack:0.5 };
+/* 【精简】只保留对盲人行走真正重要的障碍类别：行人 + 各种车辆 */
+const targetClasses=["person","bicycle","car","motorcycle","bus","truck"];
+const CLASS_CN={ person:"行人",bicycle:"自行车",car:"汽车",motorcycle:"摩托车",bus:"公交车",truck:"卡车" };
+const KNOWN={ person:1.65,bicycle:1.1,car:1.6,motorcycle:1.2,bus:3.5,truck:3.5 };
 const VFOV=52*Math.PI/180;
-const DANGER=3;                 // COCO物体危险距离
+const DANGER=3;                 // COCO物体危险距离(米)
 const DANGER_BOX_RATIO=0.28;    // COCO物体占画面比例危险阈值
-const COOLDOWN=5000;            // 同物体播报冷却(ms)，略拉长减少打扰
-const AI_INTERVAL=25000;        // AI解说间隔
-const LOOP_DELAY=120;           // 主循环间隔(ms)——略提高帧率，使时域确认更稳
+const SPEAK_DIST=6;             // 【新增】只有正前方 6 米内的障碍才播报语音
+const COOLDOWN=10000;           // 【调慢】同一障碍重复播报冷却(ms) 原5000→10000
+const AI_INTERVAL=60000;        // 【调慢】AI解说间隔(ms) 原25000→60000，少打扰
+const LOOP_DELAY=120;
 const FRONT_START=10,FRONT_END=2;
-
 /* ============================================================
-   背景建模 + 帧间运动检测（核心修复，替代"底部参考色差分"）
-   原理：
-    - 保存一张背景亮度图 bgModel（分块采样，抗反光噪点）；
-    - 每帧与背景比较，|Δ| 超过阈值的地方才视为"确实发生了变化"；
-    - 画面基本静止时，Δ≈0，不会产生任何障碍框和语音（治本）；
-    - 缓慢的光照/白平衡漂移会被"背景缓移"吸收掉，不会误报。
+   背景建模 + 帧间运动检测
    ============================================================ */
-const BLOCK=10;                 // 采样块边长（像素）
-const BG_DIFF_THRESHOLD=26;     // 相对背景亮度差大于此视为变动（原GEN_DIFF=18，偏敏感，已调高）
-const GEN_MIN_AREA_BLOCKS=6;    // 运动连通块最少块数（滤孤立噪点；原来是按像素面积，门槛远低于此）
-const GEN_MIN_W_BLOCKS=2;       // 运动区域最小宽(块)
-const GEN_MIN_H_BLOCKS=2;       // 最小高(块)
-const BG_ABSORB_RATE=0.08;      // 静止帧背景吸收速率
-let bgModel=null;               // Float32Array 背景亮度，长度 = gw*gh
-
-// 通用障碍中心到画面计时参考
+const BLOCK=10;
+const BG_DIFF_THRESHOLD=32;     // 【调高】原26→32，降低背景噪声误判
+const GEN_MIN_AREA_BLOCKS=10;   // 【调高】原6→10，滤掉更多孤立噪点框
+const GEN_MIN_W_BLOCKS=2;
+const GEN_MIN_H_BLOCKS=2;
+const BG_ABSORB_RATE=0.08;
+let bgModel=null;
 const GEN_DANGER_DIST=2.5;
-const GEN_SPEAK_DIST=12;
-
+const GEN_SPEAK_DIST=6;         // 【调近】原12→6，只播近处通用障碍
 let genCanvas=null,genCtx=null;
-
 /* ============================================================
    语音
    ============================================================ */
@@ -221,7 +200,6 @@ function loadVoices(){
  if(!preferredVoice)preferredVoice=voices.find(v=>v.lang.startsWith("zh"))||null;
 }
 if(supportTTS){speechSynthesis.addEventListener('voiceschanged',loadVoices);loadVoices();}
-
 const video=document.getElementById('video'),canvas=document.getElementById('canvas'),ctx=canvas.getContext('2d');
 const logDiv=document.getElementById('log'),statusText=document.getElementById('statusText');
 const statusDot=document.getElementById('statusDot');
@@ -232,18 +210,15 @@ const nowIcon=document.getElementById('nowIcon'),nowTitle=document.getElementByI
 const dangerBanner=document.getElementById('dangerBanner'),dangerText=document.getElementById('dangerText');
 const logHead=document.getElementById('logHead'),logBody=document.getElementById('logBody');
 const toast=document.getElementById('toast');
-
 let model=null,running=false,isVoice=false,lastObjects=[],lastAiTime=0;
-
-/* ====== 播报状态：全局限速 + 时域稳定确认（杜绝"红框抖动→频率换新→反复播报"） ====== */
-let track=new Map();                 // key -> lastSpeakTime
-const GLOBAL_COOLDOWN=2800;          // 非紧急语音最小间隔
-const GLOBAL_COOLDOWN_DANGER=1400;   // 危险语音也给最小间隔，防止无限连念
+/* ====== 播报状态：全局限速 + 时域稳定确认 ====== */
+let track=new Map();
+const GLOBAL_COOLDOWN=6000;         // 【调慢】普通语音最小间隔(ms) 原2800→6000
+const GLOBAL_COOLDOWN_DANGER=4000;  // 【调慢】危险语音最小间隔(ms) 原1400→4000
 let lastGlobalSpeakTime=0;
-let objConfirm=new Map();            // key -> {seen,lastAt} 时域确认
-const CONFIRM_WINDOW=900;            // 稳定时间窗(ms)
-const CONFIRM_MIN=2;                 // 至少稳定出现 2 个连续周期才播报
-
+let objConfirm=new Map();
+const CONFIRM_WINDOW=900;
+const CONFIRM_MIN=2;
 function log(m,cls){
  const d=new Date();
  const t=('0'+d.getHours()).slice(-2)+':'+('0'+d.getMinutes()).slice(-2)+':'+('0'+d.getSeconds()).slice(-2);
@@ -256,7 +231,6 @@ function log(m,cls){
 }
 logHead.onclick=()=>{const o=logBody.classList.toggle('open');logHead.setAttribute('aria-expanded',o);logHead.querySelector('.chev').style.transform=o?'rotate(180deg)':'';};
 logHead.onkeydown=e=>{if(e.key==='Enter'||e.key===' '){e.preventDefault();logHead.onclick()}};
-
 /* ====== 语音队列 ====== */
 class VQ{
  constructor(){this.q=[];this.p=false;}
@@ -285,18 +259,15 @@ class VQ{
  }
 }
 const vq=new VQ();
-
-/* ====== speak：危险语音也走全局限速，杜绝无限连念 ====== */
 function speak(t,urgent){
  const now=Date.now();
  const gap=now-lastGlobalSpeakTime;
  const minGap=urgent?GLOBAL_COOLDOWN_DANGER:GLOBAL_COOLDOWN;
- if(gap<minGap)return;                     //【修复】无论是否紧急，都强制限速
+ if(gap<minGap)return;   // 全局限速，杜绝连续连念
  lastGlobalSpeakTime=now;
  try{vq.speak(t,urgent);}catch(e){log("语音报错："+e.message,"warn")}
 }
-
-/* ====== 时域稳定确认：同一候选需连续稳定出现才算，滤掉一闪而过的噪点框 ====== */
+/* ====== 时域稳定确认 ====== */
 function confirm(key){
  const now=Date.now();
  let e=objConfirm.get(key);
@@ -309,7 +280,6 @@ function pruneConfirm(now){
  if(now%5)return;
  for(const[k,e]of objConfirm.entries()){if(now-e.lastAt>CONFIRM_WINDOW*4)objConfirm.delete(k);}
 }
-
 /* ============================================================
    基础工具
    ============================================================ */
@@ -332,9 +302,8 @@ function iou(a,b){
  const u=a.w*a.h+b.w*b.h-i;
  return u?i/u:0;
 }
-
 /* ============================================================
-   通用障碍检测（改写为背景建模 + 帧间运动检测）
+   通用障碍检测（背景建模 + 帧间运动检测）
    ============================================================ */
 function analyzeGeneric(vw,vh){
  const gw=Math.ceil(vw/BLOCK),gh=Math.ceil(vh/BLOCK);
@@ -343,34 +312,27 @@ function analyzeGeneric(vw,vh){
  genCtx.drawImage(video,0,0,gw,gh);
  const img=genCtx.getImageData(0,0,gw,gh).data;
  const N=gw*gh;
- // 当前分块平均亮度
  const cur=new Float32Array(N);
  for(let i=0;i<N;i++){
   const r=img[i*4],g=img[i*4+1],b=img[i*4+2];
   cur[i]=0.299*r+0.587*g+0.114*b;
  }
- // 首次运行：以当前帧为初始背景
  if(!bgModel||bgModel.length!==N){bgModel=new Float32Array(cur);return [];}
- // 计算差异
  const diff=new Uint8Array(N);
  let change=0;
  for(let i=0;i<N;i++){
   if(Math.abs(cur[i]-bgModel[i])>BG_DIFF_THRESHOLD){diff[i]=1;change++;}
  }
  const moveRatio=change/N;
- // 背景吸收（缓慢的光照漂移被吸收，静止画面逐渐稳定）
  const rate = moveRatio<0.04 ? BG_ABSORB_RATE : 0;
  if(rate>0){
   let didAbsorb=false;
   for(let i=0;i<N;i++){
    if(!diff[i]){bgModel[i]=bgModel[i]*(1-rate)+cur[i]*rate;didAbsorb=true;}
   }
-  // 若整幅几乎全静止，也整体缓移背景，避免角落残留
   if(moveRatio<0.008&&!didAbsorb){for(let i=0;i<N;i++)bgModel[i]=bgModel[i]*(1-rate)+cur[i]*rate;}
  }
- if(change<GEN_MIN_AREA_BLOCKS)return [];   // 运动过少视为噪声
-
- // 连通域聚类
+ if(change<GEN_MIN_AREA_BLOCKS)return [];
  const seen=new Uint8Array(N);
  const boxes=[];
  for(let y=0;y<gh;y++)for(let x=0;x<gw;x++){
@@ -392,7 +354,6 @@ function analyzeGeneric(vw,vh){
   if(cnt<GEN_MIN_AREA_BLOCKS)continue;
   const bw=maxX-minX+1,bh=maxY-minY+1;
   if(bw<GEN_MIN_W_BLOCKS||bh<GEN_MIN_H_BLOCKS)continue;
-  // 映射回原分辨率
   const x2=minX*BLOCK,y2=minY*BLOCK,w2=bw*BLOCK,h2=bh*BLOCK;
   if(w2<8||h2<8)continue;
   const cx=x2+w2/2,cy=y2+h2/2,bottomY=cy+h2/2;
@@ -409,17 +370,15 @@ function analyzeGeneric(vw,vh){
  }
  return boxes;
 }
-
 /* ============================================================
-   墙体检测（同样基于背景运动：只有当前帧相对背景出现大块下方差异才判墙，
-   且需要时域稳定，避免把横向阴影/反光带误当墙）
+   墙体检测
    ============================================================ */
 const WALL_REF_HEIGHT=2.4;
 const WALL_DANGER_DIST=3;
-const WALL_DIFF=30;              // 原16，已调高
+const WALL_DIFF=30;
 const WALL_MIN_ROWS=6;
 const WALL_STEP=3;
-const WALL_MIN_HEIGHT_RATIO=0.2; // 原0.3，稍放宽但更稳
+const WALL_MIN_HEIGHT_RATIO=0.2;
 let wallCanvas=null,wallCtx=null;
 function analyzeWall(vw,vh){
  if(!bgModel||bgModel.length===0)return null;
@@ -429,26 +388,12 @@ function analyzeWall(vw,vh){
  wallCanvas.width=sw;wallCanvas.height=sh;
  wallCtx.drawImage(video,0,0,sw,sh);
  const img=wallCtx.getImageData(0,0,sw,sh).data;
- // 只在"画面底部确有运动"时才考虑墙体（画面静止不连续重复报警）
- // 用背景模型判断底部是否在变化
- const gw=bgModel?Math.round(sw*(vw?1:1)):0; // 仅用于运动率感知，简单在墙画布上测
- let moving=0,total=0;
- for(let y=Math.floor(sh*0.6);y<sh;y+=3){
-  for(let x=0;x<sw;x+=4){
-   const i=(y*sw+x)*4;
-   const lum=0.299*img[i]+0.587*img[i+1]+0.114*img[i+2];
-   total++;
-   // 没有逐块背景时退化为跳过（不判墙）
-  }
- }
- // 底部平均亮度作保守校验
  let r=0,g=0,b=0,n=0;
  const gh=Math.max(4,Math.floor(sh*0.14));
  for(let y=sh-gh;y<sh;y+=2)for(let x=0;x<sw;x+=3){const i=(y*sw+x)*4;r+=img[i];g+=img[i+1];b+=img[i+2];n++;}
  if(!n)return null;
  r/=n;g/=n;b/=n;
- if((r+g+b)/3<26)return null;   // 全黑不算墙
- // 向上找与底部差异大的连续行
+ if((r+g+b)/3<26)return null;
  let runY0=-1,runLen=0,runY1=-1,found=false;
  for(let y=sh-1;y>=0;y-=WALL_STEP){
   let rr=0,gg=0,bb=0;
@@ -473,22 +418,22 @@ function analyzeWall(vw,vh){
  const dist=Math.max(0.3,WALL_REF_HEIGHT*fp/wallPx);
  return {dist,ratio,base:runY0,top:runY1};
 }
-
 /* ============================================================
-   AI解说
+   AI 解说（安全时不播报，只有重要障碍才说话）
    ============================================================ */
 function localSuggest(objs){
- if(!objs.length)return"前方暂未检测障碍，可以放心行走。";
+ if(!objs.length)return"";
  const danger=objs.filter(o=>o.danger);
- if(danger.length){const d=danger[0];return"危险！前方"+d.dist.toFixed(1)+"米有障碍物，请停下绕行。";}
- const front=objs.filter(o=>o.dir==="正前方");
- if(front.length){const f=front[0];return"正前方"+f.dist.toFixed(1)+"米有障碍物，放慢速度避让。";}
- return"路况正常，注意脚下。";
+ if(danger.length){const d=danger[0];return"危险！前方"+d.dist.toFixed(1)+"米有"+d.cn+"，请停下绕行。";}
+ const front=objs.filter(o=>o.dir==="正前方"&&o.dist<SPEAK_DIST);
+ if(front.length){const f=front[0];return"正前方"+f.dist.toFixed(1)+"米有"+f.cn+"，放慢速度避让。";}
+ return"";   // 无重要障碍不播报
 }
 async function runAi(){
  const objs=lastObjects;
  if(!objs.length){aiTip.textContent="AI安全解说：画面无障碍物，可以前行。";return;}
  const reply=localSuggest(objs);
+ if(!reply){aiTip.textContent="AI安全解说：路况正常，注意脚下。";return;}  // 【精简】安全不播报
  aiTip.textContent="AI建议："+reply;
  speak(reply,false);log("AI建议："+reply);
 }
@@ -496,7 +441,6 @@ function setStatus(txt,cls){statusText.textContent=txt;statusDot.classList.toggl
 function setNow(state,title,sub){nowIcon.className=state;nowTitle.textContent=title;nowSubEl.textContent=sub||''}
 const showDanger=t=>{dangerText.textContent=t;dangerBanner.classList.add('show')};
 const hideDanger=()=>dangerBanner.classList.remove('show');
-
 /* ============================================================
    主循环
    ============================================================ */
@@ -504,13 +448,13 @@ async function loop(){
  if(!running)return;
  if(!model||!video.srcObject||!video.videoWidth){setTimeout(loop,LOOP_DELAY);return;}
  try{
-  const preds=await model.detect(video,40,0.2,0.5);
+  /* 【精简】置信度0.2→0.6，结果上限40→15，大幅减少误识别 */
+  const preds=await model.detect(video,15,0.6,0.5);
   const vw=video.videoWidth,vh=video.videoHeight;
   canvas.width=vw;canvas.height=vh;ctx.clearRect(0,0,vw,vh);
   const now=Date.now();let objs=[];
   pruneConfirm(now);
-
-  /* ---- A. COCO 物体（真实模型，稳定框，播种收集） ---- */
+  /* ---- A. COCO 物体 ---- */
   for(let o of preds){
    if(targetClasses.indexOf(o.class)<0)continue;
    const [x,y,w,h]=o.bbox;
@@ -519,7 +463,6 @@ async function loop(){
    const danger=dist<DANGER||(h/vh)>DANGER_BOX_RATIO;
    const dir=clockDir(cx/vw),cn=CLASS_CN[o.class];
    const isFrontArea=(dir>=FRONT_START||dir<=FRONT_END);
-   // 更粗、更稳的 key（min.2级分桶），避免微抖导致频繁换新
    const objKey=o.class+"_"+Math.round(cx/22)+"_"+Math.round(cy/22);
    ctx.strokeStyle=danger?"#ff4d4f":"#ffd166";
    ctx.lineWidth=3;ctx.strokeRect(x,y,w,h);
@@ -529,8 +472,7 @@ async function loop(){
   }
   objs.sort((a,b)=>{ if(a.danger!==b.danger)return a.danger?-1:1; if(a.isFrontArea!==b.isFrontArea)return a.isFrontArea?-1:1; return a.dist-b.dist; });
   const top=objs[0];
-
-  /* ---- B. 通用障碍（背景建模运动检测，实线/虚线按危险色） ---- */
+  /* ---- B. 通用障碍 ---- */
   const generic=analyzeGeneric(vw,vh);
   for(const g of generic){
    let dup=false;
@@ -542,10 +484,8 @@ async function loop(){
    ctx.fillText("障碍 "+g.dist.toFixed(1)+"m",g.x,g.y-5);
    ctx.setLineDash([]);
   }
-
-  /* ---- C. 统一选出 1 个最高优先级候选播报（带时域确认） ---- */
+  /* ---- C. 统一选出 1 个最高优先级候选播报 ---- */
   const candidates=[];
-  // 候选1：墙体（需要时域稳定 + 静止时不重复灌报）
   const wall=analyzeWall(vw,vh);
   if(wall){
    const by=wall.top*(vh/(Math.max(32,Math.floor(96*vh/vw))));
@@ -563,8 +503,8 @@ async function loop(){
     }
    }
   }
-  // 候选2：COCO 障碍（前方且够近才播）
-  if(top&&top.isFrontArea&&top.dist<12){
+  /* 候选2：COCO 障碍 —— 【精简】只有正前方 SPEAK_DIST 米内才播 */
+  if(top&&top.isFrontArea&&top.dist<SPEAK_DIST){
    const okey="c_"+top.objKey;
    if(confirm(okey)){
     const clockName=(top.dir===12)?"正前方":(top.dir+"点钟方向");
@@ -573,7 +513,6 @@ async function loop(){
     candidates.push({type:"coco",dist:top.dist,danger:top.danger,speakText:txt,key:okey});
    }
   }
-  // 候选3：通用障碍（前方够近；key 取更粗桶 + 时域确认）
   let genFront=null;
   for(const g of generic){if(g.isFrontArea&&(!genFront||g.dist<genFront.dist))genFront=g;}
   if(genFront&&genFront.dist<GEN_SPEAK_DIST){
@@ -584,7 +523,6 @@ async function loop(){
     candidates.push({type:"generic",dist:genFront.dist,danger:genFront.danger,speakText:txt,key:gkey});
    }
   }
-  // 优先级：danger 优先，距离近优先
   candidates.sort((a,b)=>{ if(a.danger!==b.danger)return a.danger?-1:1; return a.dist-b.dist; });
   const best=candidates[0];
   if(best){
@@ -594,8 +532,7 @@ async function loop(){
     log(best.speakText,best.danger?"danger":"warn");
    }
   }
-
-  /* ---- D. 状态卡片 / 危险横幅（永远照最新画面判断） ---- */
+  /* ---- D. 状态卡片 / 危险横幅 ---- */
   if(wall&&wall.dist<WALL_DANGER_DIST){
    showDanger("危险！正前方墙体约"+wall.dist.toFixed(1)+"米");
    setNow("danger","正前方墙体 "+wall.dist.toFixed(1)+"米","危险！请停下");
@@ -614,16 +551,13 @@ async function loop(){
   }else{
    setNow("ok","前方畅通","无正前方障碍物，请继续行走");hideDanger();
   }
-
   lastObjects=objs.map(o=>({cn:o.cn,dist:o.dist,dir:o.dir===12?"正前方":o.dir+"点钟方向",danger:o.danger}));
-  // 清理过期冷却
   for(const[k,t]of track.entries()){if(now-t>COOLDOWN*3)track.delete(k);}
   if(now-lastAiTime>=AI_INTERVAL){lastAiTime=now;if(lastObjects.length)runAi();}
  }catch(err){log("识别出错:"+err.message,"warn")}
  if(window.speechSynthesis&&Date.now()-lastGlobalSpeakTime>2500){try{speechSynthesis.resume();}catch(e){}}
  setTimeout(loop,LOOP_DELAY);
 }
-
 /* ============================================================
    交互
    ============================================================ */
@@ -637,7 +571,7 @@ btnStart.onclick=async function(){
   if(!isVoice){try{speechSynthesis.cancel();}catch(e){}speak("语音已开启，暖阳视界开始播报",true);isVoice=true;}
   if(running){
    running=false;isVoice=false;
-   btnStartText.textContent="开启播报";btnStartSub.textContent="识别盲道障碍";
+   btnStartText.textContent="开启播报";btnStartSub.textContent="识别重要障碍";
    btnStart.classList.remove('running');setStatus("已停止");
    setNow("info","已停止","点击重新开启");hideDanger();
    return;
@@ -661,17 +595,11 @@ btnStart.onclick=async function(){
   setStatus("出错："+e.message);setNow("danger","启动失败","检查摄像头权限");
  }finally{btnStart.disabled=false;}
 };
-
-/* 一键导航：打开高德步行/驾车导航 */
 btnNav.onclick=function(){
  setNow("info","正在打开高德地图","正在规划导航…");
  speak("正在打开高德地图导航",true);
- const enc=encodeURIComponent("目的地");
- // 高德网页导航（步行），可自行改 destination
  window.open("https://uri.amap.com/navigation?to="+encodeURIComponent("116.397428,39.90923")+"&mode=walk&policy=1&src=warmyang&callnative=1");
 };
-
-/* 紧急呼叫 / 长按改联系人 */
 let sosPhone=localStorage.getItem("sosPhone")||"";
 let sosPressTimer=null;
 const askPhone=()=>{
@@ -681,22 +609,18 @@ const askPhone=()=>{
 };
 sosBtn.addEventListener("touchstart",e=>{
  e.preventDefault();
- sosPressTimer=setTimeout(()=>{ // 长按 → 改联系人
+ sosPressTimer=setTimeout(()=>{
   navigator.vibrate&&navigator.vibrate(80);
   if(askPhone()){toastShow("联系人已更新");}
  },700);
 },{passive:false});
-sosBtn.addEventListener("touchend",e=>{
- clearTimeout(sosPressTimer);
-},false);
+sosBtn.addEventListener("touchend",e=>{clearTimeout(sosPressTimer);},false);
 sosBtn.onclick=function(){
  if(!sosPhone){if(askPhone()){speak("联系人已设置，再次点击即可拨打",false);toastShow("请再次点击拨打");}return;}
  speak("正在拨打紧急联系人",true);log("拨打 "+sosPhone,"danger");
  window.location.href="tel:"+sosPhone;
 };
 sosBtn.oncontextmenu=e=>e.preventDefault();
-
-/* 双击暂停/继续 */
 let lastTap=0;
 document.addEventListener("touchend",e=>{
  const t=Date.now();
@@ -706,13 +630,11 @@ document.addEventListener("touchend",e=>{
 function pauseToggle(){
  if(!running)return;
  running=false;
- btnStartText.textContent="开启播报";btnStartSub.textContent="识别盲道障碍";
+ btnStartText.textContent="开启播报";btnStartSub.textContent="识别重要障碍";
  btnStart.classList.remove('running');setStatus("已暂停");
  setNow("info","已暂停","双击继续播报");hideDanger();
  toastShow("已暂停");
 }
-
-/* 画面上滑=导航，下滑=紧急呼叫 */
 let touchStartY=null,touchStartX=null;
 camBox.addEventListener("touchstart",e=>{touchStartY=e.touches[0].clientY;touchStartX=e.touches[0].clientX;},{passive:true});
 camBox.addEventListener("touchend",e=>{
@@ -725,21 +647,16 @@ camBox.addEventListener("touchend",e=>{
  }
  touchStartY=null;touchStartX=null;
 },{passive:true});
-
-/* 测试声音 */
 document.getElementById('btnTest').onclick=function(){
  speak("声音正常，这是测试播报。",true);
  log("已触发声音测试","ok");
 };
-
-/* toast */
 let toastTimer=null;
 function toastShow(t){
  toast.textContent=t;toast.classList.add('show');
  clearTimeout(toastTimer);
  toastTimer=setTimeout(()=>toast.classList.remove('show'),1600);
 }
-
 setStatus("待开启");setNow("info","等待开启","开启后实时播报前方路况");
 log("暖阳视界已就绪，点击【开启播报】开始识别", "ok");
 })();
