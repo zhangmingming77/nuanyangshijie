@@ -173,26 +173,27 @@ person:1.65,bicycle:1.1,car:1.6,motorcycle:1.2,bus:3.5,truck:3.5,"fire hydrant":
 const VFOV=52*Math.PI/180;      // 更接近手机后置摄像头实际视角
 const DANGER=3;                 // COCO 物体危险距离(米)
 const DANGER_BOX_RATIO=0.28;    // COCO 物体占屏比危险阈值
-const COOLDOWN=4000;            // 同物体播报冷却(ms)
+const COOLDOWN=2500;            // 同物体播报冷却(ms)
 const AI_INTERVAL=15000,LOOP_DELAY=800;
 const FRONT_START=10,FRONT_END=2; // 10点~2点方向都算前方播报
 /* ============ 墙面检测(重做版) ============ */
 const WALL_REF_HEIGHT=2.4;      // 墙面参考高度(米,约一层楼/门高度)
-const WALL_DANGER_DIST=2.5;     // 2.5米内报警
-const WALL_DIFF=26;             // 与地面色差阈值
+const WALL_DANGER_DIST=3;       // 3米内报警（提前量更大）
+const WALL_DIFF=16;             // 与地面色差阈值（越低越灵敏）
 const WALL_MIN_ROWS=6;          // 最少连续行数才算墙
 const WALL_STEP=3;              // 纵向扫描步长
 const WALL_MIN_HEIGHT_RATIO=0.3;// 墙面至少占画面30%高度
-const WALL_COOLDOWN=4000;
+const WALL_COOLDOWN=3000;
 let lastWallAlert=0,wallResult=null;
 let wallCanvas=null,wallCtx=null;
+let sharedCanvas=null,sharedCtx=null,sharedW=0,sharedH=0; // 共享缩小画面，省性能
 /* ============ 通用障碍物检测 ============ */
-const GEN_DIFF=32;              // 与地面色差阈值
-const GEN_REF_HEIGHT=0.5;       // 通用障碍参考高度(米,路牙/台阶/锥桶等)
+const GEN_DIFF=18;              // 与地面色差阈值（越低越灵敏）
+const GEN_REF_HEIGHT=0.9;       // 通用障碍参考高度(米,台阶/矮柱/路障)
 const GEN_DANGER_DIST=2.5;      // 通用障碍危险距离(米)
 const GEN_BOX_RATIO=0.22;       // 通用障碍占屏比危险阈值
-const GEN_SPEAK_DIST=8;         // 通用障碍播报距离上限(米)
-const GEN_MIN_AREA=8;           // 连通块最小像素数(缩略图)
+const GEN_SPEAK_DIST=12;        // 通用障碍播报距离上限(米)
+const GEN_MIN_AREA=4;           // 连通块最小像素数(缩略图,越小越灵敏)
 const GEN_STRIDE_X=3,GEN_STRIDE_Y=2;
 let genCanvas=null,genCtx=null;
 let genericTrack=new Map();     // 通用障碍播报去重
@@ -296,7 +297,8 @@ if(!video.videoWidth) return null;
 const sw=96,sh=Math.max(32,Math.floor(sw*vh/vw));
 if(!wallCanvas){wallCanvas=document.createElement('canvas');wallCtx=wallCanvas.getContext('2d',{willReadFrequently:true});}
 wallCanvas.width=sw;wallCanvas.height=sh;
-wallCtx.drawImage(video,0,0,sw,sh);
+// 从共享canvas缩小过去，省一次video绘制
+if(sharedCtx&&sharedW){wallCtx.drawImage(sharedCanvas,0,0,sharedW,sharedH,0,0,sw,sh);}else{wallCtx.drawImage(video,0,0,sw,sh);}
 const img=wallCtx.getImageData(0,0,sw,sh).data;
 // 1) 取画面底部14%作为"地面参考色"
 const gh=Math.max(4,Math.floor(sh*0.14));
@@ -333,11 +335,17 @@ return {dist,ratio,base:runY0,top:runY1}; // base>top
 }
 /* ============ 通用障碍物检测：不靠COCO，找画面中"不是地面"的凸起物 ============ */
 function analyzeGeneric(vw,vh){
-const sw=120,sh=Math.max(32,Math.floor(sw*vh/vw));
-if(!genCanvas){genCanvas=document.createElement('canvas');genCtx=genCanvas.getContext('2d',{willReadFrequently:true});}
-genCanvas.width=sw;genCanvas.height=sh;
-genCtx.drawImage(video,0,0,sw,sh);
-const img=genCtx.getImageData(0,0,sw,sh).data;
+const sw=sharedW||160,sh=sharedH||Math.max(32,Math.floor(160*vh/vw));
+let img;
+// 优先用共享canvas（已提前画好），省一次 drawImage
+if(sharedCtx&&sharedW&&sharedH&&sharedW===sw&&sharedH===sh){
+  img=sharedCtx.getImageData(0,0,sw,sh).data;
+}else{
+  if(!genCanvas){genCanvas=document.createElement('canvas');genCtx=genCanvas.getContext('2d',{willReadFrequently:true});}
+  genCanvas.width=sw;genCanvas.height=sh;
+  genCtx.drawImage(video,0,0,sw,sh);
+  img=genCtx.getImageData(0,0,sw,sh).data;
+}
 const diffMap=new Uint8Array(sw*sh);
 // 1) 逐列：底部16%为该列地面参考，从下往上标出"非地面"像素
 for(let x=0;x<sw;x+=GEN_STRIDE_X){
@@ -393,7 +401,17 @@ const h=(s.maxY-s.minY+GEN_STRIDE_Y)*scaleY;
 if(h<6||w<6)continue; // 过小
 const x=s.minX*scaleX,y=s.minY*scaleY;
 const cx=x+w/2,cy=y+h/2;
-const dist=Math.max(0.3,GEN_REF_HEIGHT*fp/h);
+// 距离估算：优先用底部在画面中的位置（越靠下越近），更准确
+const bottomY=cy+h/2;
+const horizonY=vh*0.42;
+let distEst;
+if(bottomY<=horizonY) distEst=15;
+else{
+  const ratio=(bottomY-horizonY)/(vh-horizonY);
+  distEst=0.5+(1-ratio)*10;
+}
+const distByH=Math.max(0.3,GEN_REF_HEIGHT*fp/h);
+const dist=Math.min(distEst,distByH); // 取近的，保守判断
 const danger=dist<GEN_DANGER_DIST||(h/vh)>GEN_BOX_RATIO;
 boxes.push({x,y,w,h,cx,cy,nx:cx/vw,dir:clockDir(cx/vw),dist,danger,isFrontArea:(clockDir(cx/vw)>=FRONT_START||clockDir(cx/vw)<=FRONT_END)});
 }
@@ -424,7 +442,7 @@ async function loop(){
 if(!running)return;
 if(!model||!video.srcObject||!video.videoWidth){setTimeout(loop,LOOP_DELAY);return;}
 try{
-const preds=await model.detect(video,20,0.4,0.5);
+const preds=await model.detect(video,40,0.2,0.5);
 const vw=video.videoWidth,vh=video.videoHeight;
 canvas.width=vw;canvas.height=vh;ctx.clearRect(0,0,vw,vh);
 const now=Date.now();let objs=[];
@@ -465,7 +483,7 @@ if(a.isFront!==b.isFront)return a.isFront?-1:1;
 return a.dist-b.dist;
 });
 const top=objs[0];
-if(top&&top.isFrontArea&&top.dist<10){
+if(top&&top.isFrontArea&&top.dist<12){
 const clockName=(top.dir===12)?"正前方":(top.dir+"点钟方向");
 const id=top.cls+"_"+Math.round(top.nx*20);
 if(now-(track.get(id)||0)>=COOLDOWN){
@@ -479,6 +497,11 @@ log(txt,top.danger?"danger":"warn");
 }
 }
 }
+// ★ 共享缩小画面：只画一次，通用检测+墙面检测都复用
+const __sw=160,__sh=Math.max(32,Math.floor(160*vh/vw));
+if(!sharedCanvas){sharedCanvas=document.createElement('canvas');sharedCtx=sharedCanvas.getContext('2d',{willReadFrequently:true});}
+if(sharedW!==__sw||sharedH!==__sh){sharedCanvas.width=__sw;sharedCanvas.height=__sh;sharedW=__sw;sharedH=__sh;}
+sharedCtx.drawImage(video,0,0,__sw,__sh);
 /* ---- B. 通用障碍物检测：虚线框 + 与COCO去重 ---- */
 const generic=analyzeGeneric(vw,vh);
 for(const g of generic){
