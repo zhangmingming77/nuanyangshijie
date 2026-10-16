@@ -169,6 +169,11 @@ const SPEAK_DIST=6;             // 【新增】只有正前方 6 米内的障碍
 const COOLDOWN=10000;           // 【调慢】同一障碍重复播报冷却(ms) 原5000→10000
 const AI_INTERVAL=60000;        // 【调慢】AI解说间隔(ms) 原25000→60000，少打扰
 const LOOP_DELAY=120;
+/* ====== 【新增】障碍框跟踪锁定：跨帧匹配 + 位置平滑，让框稳稳粘住障碍物不乱跳 ====== */
+const TRACK_CONFIRM_MIN=3;      // 新障碍连续稳定出现 3 帧才绘制/播报，滤掉一闪而过的噪点框
+const TRACK_LOST_TIMEOUT=700;   // 障碍短暂丢失仍保留框(ms)，避免框闪断
+const TRACK_SMOOTH=0.55;        // 框位置平滑系数(越大越稳、越滞后)
+const TRACK_IOU_MATCH=0.3;      // 跨帧匹配 IoU 阈值(高→只匹配同一个障碍)
 const FRONT_START=10,FRONT_END=2;
 /* ============================================================
    背景建模 + 帧间运动检测
@@ -211,6 +216,12 @@ const dangerBanner=document.getElementById('dangerBanner'),dangerText=document.g
 const logHead=document.getElementById('logHead'),logBody=document.getElementById('logBody');
 const toast=document.getElementById('toast');
 let model=null,running=false,isVoice=false,lastObjects=[],lastAiTime=0;
+/* 【新增】跨帧跟踪对象列表：每个稳定障碍一条，位置经平滑后锁定 */
+let trackers=[];
+let trackerId=0;
+/* 【新增】通用障碍（虚线框）的跟踪列表 */
+let genTracks=[];
+let genTid=0;
 /* ====== 播报状态：全局限速 + 时域稳定确认 ====== */
 let track=new Map();
 const GLOBAL_COOLDOWN=6000;         // 【调慢】普通语音最小间隔(ms) 原2800→6000
@@ -358,12 +369,12 @@ function analyzeGeneric(vw,vh){
   if(w2<8||h2<8)continue;
   const cx=x2+w2/2,cy=y2+h2/2,bottomY=cy+h2/2;
   const horizonY=vh*0.42;
+  /* 【修复】改用"底部位置"估距：越靠画面下方越近、越靠上越远；
+     不再用"假设障碍0.9米高"反推，避免障碍占高时距离被压到0.5米 */
   let distEst;
-  if(bottomY<=horizonY)distEst=15;
-  else{const ratio=(bottomY-horizonY)/(vh-horizonY);distEst=0.5+(1-ratio)*10;}
-  const fp=getFocal(vh);
-  const distByH=Math.max(0.3,(0.9*fp)/h2);
-  const dist=Math.min(distEst,distByH);
+  if(bottomY<=horizonY)distEst=14;
+  else{const ratio=(bottomY-horizonY)/(vh-horizonY);distEst=0.8+(1-ratio)*11;}
+  const dist=Math.min(14,Math.max(0.8,distEst));
   const danger=dist<GEN_DANGER_DIST||(h2/vh)>0.22;
   boxes.push({x:x2,y:y2,w:w2,h:h2,cx,cy,nx:cx/vw,dir:clockDir(cx/vw),dist,danger,
    isFrontArea:(clockDir(cx/vw)>=FRONT_START||clockDir(cx/vw)<=FRONT_END)});
@@ -454,35 +465,101 @@ async function loop(){
   canvas.width=vw;canvas.height=vh;ctx.clearRect(0,0,vw,vh);
   const now=Date.now();let objs=[];
   pruneConfirm(now);
-  /* ---- A. COCO 物体 ---- */
+  /* ---- A. COCO 物体（跨帧跟踪 + 位置平滑：锁定障碍，框不再乱跳） ---- */
+  const dets=[];
   for(let o of preds){
    if(targetClasses.indexOf(o.class)<0)continue;
    const [x,y,w,h]=o.bbox;
-   const cx=x+w/2,cy=y+h/2;
-   const dist=getDist(o.class,h,vh);
+   dets.push({cls:o.class,cn:CLASS_CN[o.class],x,y,w,h,cx:x+w/2,cy:y+h/2});
+  }
+  /* 1) 现有跟踪对象与当前帧检测匹配（按 IoU 归属同一个障碍） */
+  const used=new Array(dets.length).fill(false);
+  for(const tr of trackers){
+   let best=-1,bestIoU=0;
+   for(let i=0;i<dets.length;i++){
+    if(used[i])continue;
+    const v=iou({x:dets[i].x,y:dets[i].y,w:dets[i].w,h:dets[i].h},{x:tr.x,y:tr.y,w:tr.w,h:tr.h});
+    if(v>bestIoU){bestIoU=v;best=i;}
+   }
+   if(best>=0&&bestIoU>=TRACK_IOU_MATCH){
+    const d=dets[best];used[best]=true;
+    tr.cls=d.cls;tr.cn=d.cn;
+    tr.x+=(d.x-tr.x)*TRACK_SMOOTH;      // 位置向新检测平滑移动，消除抖动
+    tr.y+=(d.y-tr.y)*TRACK_SMOOTH;
+    tr.w+=(d.w-tr.w)*TRACK_SMOOTH;
+    tr.h+=(d.h-tr.h)*TRACK_SMOOTH;
+    tr.cx=tr.x+tr.w/2;tr.cy=tr.y+tr.h/2;
+    tr.seen++;tr.lastSeen=now;
+   }
+  }
+  /* 2) 新检测作为新跟踪对象 */
+  for(let i=0;i<dets.length;i++){
+   if(used[i])continue;
+   const d=dets[i];
+   trackerId++;
+   trackers.push({id:trackerId,cls:d.cls,cn:d.cn,x:d.x,y:d.y,w:d.w,h:d.h,cx:d.cx,cy:d.cy,seen:1,lastSeen:now});
+  }
+  /* 3) 清理长时间丢失的跟踪 */
+  trackers=trackers.filter(tr=>(now-tr.lastSeen)<TRACK_LOST_TIMEOUT);
+  /* 4) 只绘制/播报"确认过"的稳定框，位置用平滑后的值锁定 */
+  for(const tr of trackers){
+   if(tr.seen<TRACK_CONFIRM_MIN)continue;   // 未确认的噪点框不显示、不播报
+   const x=tr.x,y=tr.y,w=tr.w,h=tr.h;
+   const dist=getDist(tr.cls,h,vh);
    const danger=dist<DANGER||(h/vh)>DANGER_BOX_RATIO;
-   const dir=clockDir(cx/vw),cn=CLASS_CN[o.class];
+   const dir=clockDir(tr.cx/vw);
    const isFrontArea=(dir>=FRONT_START||dir<=FRONT_END);
-   const objKey=o.class+"_"+Math.round(cx/22)+"_"+Math.round(cy/22);
+   const objKey="tr"+tr.id;   // 用稳定ID，同一障碍不会反复换名
    ctx.strokeStyle=danger?"#ff4d4f":"#ffd166";
    ctx.lineWidth=3;ctx.strokeRect(x,y,w,h);
    ctx.fillStyle=ctx.strokeStyle;ctx.font="15px sans-serif";
-   ctx.fillText(cn+" "+dist.toFixed(1)+"m",x,y-6);
-   objs.push({cn,dist,dir,isFrontArea,danger,nx:cx/vw,cls:o.class,objKey,bbox:{x,y,w,h}});
+   ctx.fillText(tr.cn+" "+dist.toFixed(1)+"m",x,y-6);
+   objs.push({cn:tr.cn,dist,dir,isFrontArea,danger,nx:tr.cx/vw,cls:tr.cls,objKey,bbox:{x,y,w,h}});
   }
   objs.sort((a,b)=>{ if(a.danger!==b.danger)return a.danger?-1:1; if(a.isFrontArea!==b.isFrontArea)return a.isFrontArea?-1:1; return a.dist-b.dist; });
   const top=objs[0];
-  /* ---- B. 通用障碍 ---- */
-  const generic=analyzeGeneric(vw,vh);
-  for(const g of generic){
+  /* ---- B. 通用障碍（同样跨帧跟踪+平滑，锁定不乱跳） ---- */
+  const rawGen=analyzeGeneric(vw,vh);
+  const gused=new Array(rawGen.length).fill(false);
+  for(const gt of genTracks){
+   let best=-1,bestIoU=0;
+   for(let i=0;i<rawGen.length;i++){
+    if(gused[i])continue;
+    const v=iou({x:rawGen[i].x,y:rawGen[i].y,w:rawGen[i].w,h:rawGen[i].h},{x:gt.x,y:gt.y,w:gt.w,h:gt.h});
+    if(v>bestIoU){bestIoU=v;best=i;}
+   }
+   if(best>=0&&bestIoU>=0.25){
+    const d=rawGen[best];gused[best]=true;
+    gt.x+=(d.x-gt.x)*0.5;gt.y+=(d.y-gt.y)*0.5;
+    gt.w+=(d.w-gt.w)*0.5;gt.h+=(d.h-gt.h)*0.5;
+    gt.cx=gt.x+gt.w/2;gt.cy=gt.y+gt.h/2;
+    gt.dist=d.dist;gt.danger=d.danger;
+    gt.seen++;gt.lastSeen=now;
+   }
+  }
+  for(let i=0;i<rawGen.length;i++){
+   if(gused[i])continue;
+   const d=rawGen[i];
+   genTid++;
+   genTracks.push({id:genTid,x:d.x,y:d.y,w:d.w,h:d.h,cx:d.cx,cy:d.cy,dist:d.dist,danger:d.danger,seen:1,lastSeen:now});
+  }
+  genTracks=genTracks.filter(gt=>(now-gt.lastSeen)<TRACK_LOST_TIMEOUT);
+  const generic=[];
+  for(const gt of genTracks){
+   if(gt.seen<TRACK_CONFIRM_MIN)continue;   // 未确认的噪点框不显示、不播报
+   const g={x:gt.x,y:gt.y,w:gt.w,h:gt.h,cx:gt.cx,cy:gt.cy,nx:gt.cx/vw,dir:clockDir(gt.cx/vw),
+     dist:gt.dist,danger:gt.danger,isFrontArea:(clockDir(gt.cx/vw)>=FRONT_START||clockDir(gt.cx/vw)<=FRONT_END)};
    let dup=false;
    for(const o of objs){ if(iou(g,o.bbox)>0.3){dup=true;break;} }
-   ctx.setLineDash([8,6]);
-   ctx.strokeStyle=g.danger?"#ff5a5c":"#2ecc8f";
-   ctx.lineWidth=3;ctx.strokeRect(g.x,g.y,g.w,g.h);
-   ctx.fillStyle=ctx.strokeStyle;ctx.font="13px sans-serif";
-   ctx.fillText("障碍 "+g.dist.toFixed(1)+"m",g.x,g.y-5);
-   ctx.setLineDash([]);
+   if(!dup){
+    ctx.setLineDash([8,6]);
+    ctx.strokeStyle=g.danger?"#ff5a5c":"#2ecc8f";
+    ctx.lineWidth=3;ctx.strokeRect(g.x,g.y,g.w,g.h);
+    ctx.fillStyle=ctx.strokeStyle;ctx.font="13px sans-serif";
+    ctx.fillText("障碍 "+g.dist.toFixed(1)+"m",g.x,g.y-5);
+    ctx.setLineDash([]);
+   }
+   generic.push(g);
   }
   /* ---- C. 统一选出 1 个最高优先级候选播报 ---- */
   const candidates=[];
